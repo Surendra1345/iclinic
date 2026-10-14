@@ -9,6 +9,9 @@ class ChannelType(str, Enum):
 
 class AppointmentStatus(str, Enum):
     BOOKED = "booked"
+    CANCELLED = "cancelled"
+    RESCHEDULED = "rescheduled"
+
 
 
 class ConversationState(str, Enum):

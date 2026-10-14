@@ -1,4 +1,6 @@
 from src.data.models.postgres.appointment import Appointment
+from src.data.models.postgres.appointment_cancellation import AppointmentCancellation
+from src.data.models.postgres.appointment_reschedule import AppointmentReschedule
 from src.data.models.postgres.appointment_type import AppointmentType
 from src.data.models.postgres.base import AuditMixin
 from src.data.models.postgres.conversation import Conversation
@@ -21,5 +23,7 @@ __all__ = [
     "OutboundCallRequest",
     "OutboundCall",
     "Appointment",
+    "AppointmentCancellation",
+    "AppointmentReschedule",
     "Notification",
 ]
