@@ -18,7 +18,7 @@ class Conversation(Base, AuditMixin):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     channel: Mapped[ChannelType] = mapped_column(
-        Enum(ChannelType, name="channel_type"),
+        Enum(ChannelType, name="channel_type", values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
     )
     patient_id: Mapped[Optional[int]] = mapped_column(
@@ -26,19 +26,19 @@ class Conversation(Base, AuditMixin):
         ForeignKey("patients.id"),
         nullable=True,
     )
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     current_state: Mapped[ConversationState] = mapped_column(
-        Enum(ConversationState, name="conversation_state"),
+        Enum(ConversationState, name="conversation_state", values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
     )
     outcome: Mapped[Optional[OutcomeType]] = mapped_column(
-        Enum(OutcomeType, name="outcome_type"),
+        Enum(OutcomeType, name="outcome_type", values_callable=lambda obj: [e.value for e in obj]),
         nullable=True,
     )
     handoff_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     confirmation_status: Mapped[ConfirmationStatusType] = mapped_column(
-        Enum(ConfirmationStatusType, name="confirmation_status_type"),
+        Enum(ConfirmationStatusType, name="confirmation_status_type", values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
     )
     collected_details: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)

@@ -11,4 +11,4 @@ class Location(Base, AuditMixin):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(150), nullable=False)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)

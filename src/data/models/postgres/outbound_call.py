@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Any, Dict, Optional
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, String
+from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -22,10 +22,10 @@ class OutboundCall(Base, AuditMixin):
         ForeignKey("conversations.id"),
         nullable=False,
     )
-    provider_call_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    provider_call_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, unique=True, index=True)
     number_called: Mapped[str] = mapped_column(String(30), nullable=False)
     status: Mapped[CallStatus] = mapped_column(
-        Enum(CallStatus, name="call_status"),
+        Enum(CallStatus, name="call_status", values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
     )
     attempt_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
@@ -40,3 +40,7 @@ class OutboundCall(Base, AuditMixin):
     # Relationships
     call_request: Mapped["OutboundCallRequest"] = relationship("OutboundCallRequest")
     conversation: Mapped["Conversation"] = relationship("Conversation")
+
+    __table_args__ = (
+        UniqueConstraint("call_request_id", "attempt_number", name="uq_outbound_calls_request_attempt"),
+    )

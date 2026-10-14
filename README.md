@@ -106,22 +106,37 @@ The data layer is organized around three core operational domains: **Clinic Sche
 * **Directional Foreign Keys Only**: Relationships exist only where a foreign key column is defined (e.g. `Appointment` points to `Patient`, `Slot`, `AppointmentType`, and `Conversation`).
 * **Zero Circular Imports**: Independent tables (like `Patient`, `Location`, `AppointmentType`) have zero imports of other models.
 * **No Redundant Collections**: Tables avoid heavy reverse collections that load thousands of historical records into memory.
+* **Database-Level Concurrency Protection**:
+  * **Double Booking Prevention**: Enforced via `unique=True` on `appointments.slot_id` and unique `(provider_id, start_time)` on `slots`.
+  * **Webhook Idempotency**: Enforced via `unique=True` on `outbound_calls.provider_call_id` and composite uniqueness on `(call_request_id, attempt_number)`.
+  * **Open Request Deduplication**: Partial unique index on `outbound_call_requests.number_to_call` preventing concurrent open outreach jobs for the same recipient.
+  * **Patient Identity Fast Lookups**: Composite index on `patients(full_name, date_of_birth)`.
+  * **Cascade Protection**: Slots enforce `RESTRICT` on provider deletion so doctor availability and booking histories are never accidentally purged.
 
 ---
 
 ## 🚀 Getting Started
 
-### 1. Environment Setup
+### 1. Database & Environment Setup
 
-Create a `.env` file in the project root with your PostgreSQL database connection:
+#### Option A: Running PostgreSQL via Docker Compose (Recommended)
+Start an isolated PostgreSQL 16 container with persistent storage:
+```bash
+docker compose up -d
+```
+
+#### Option B: Using a Local PostgreSQL Installation
+Ensure your PostgreSQL instance is running on port 5432.
+
+Configure your connection settings in `.env`:
 ```env
-DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/iclinic
+DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5432/iclinic
 DB_ECHO=False
 ```
 
 ### 2. Install Dependencies
 
-Install dependencies into your virtual environment with `uv`:
+Install dependencies into your local virtual environment using `uv`:
 ```bash
 uv sync
 ```

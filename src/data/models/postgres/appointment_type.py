@@ -12,4 +12,4 @@ class AppointmentType(Base, AuditMixin):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     instructions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)

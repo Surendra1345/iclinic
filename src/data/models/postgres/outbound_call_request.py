@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, String, Text
+from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Index, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.constants.enums import OutboundCallRequestStatus
@@ -14,11 +14,16 @@ class OutboundCallRequest(Base, AuditMixin):
     conversation_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("conversations.id"),
+        unique=True,
         nullable=False,
     )
     number_to_call: Mapped[str] = mapped_column(String(30), nullable=False)
     status: Mapped[OutboundCallRequestStatus] = mapped_column(
-        Enum(OutboundCallRequestStatus, name="outbound_call_request_status"),
+        Enum(
+            OutboundCallRequestStatus,
+            name="outbound_call_request_status",
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
         nullable=False,
     )
     status_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -30,3 +35,12 @@ class OutboundCallRequest(Base, AuditMixin):
 
     # Relationships
     conversation: Mapped["Conversation"] = relationship("Conversation")
+
+    __table_args__ = (
+        Index(
+            "uq_open_outbound_requests_number",
+            "number_to_call",
+            unique=True,
+            postgresql_where=text("status IN ('waiting', 'processing')"),
+        ),
+    )

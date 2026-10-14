@@ -18,6 +18,7 @@ class Appointment(Base, AuditMixin):
     slot_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("slots.id"),
+        unique=True,
         nullable=False,
     )
     appointment_type_id: Mapped[int] = mapped_column(
@@ -26,17 +27,18 @@ class Appointment(Base, AuditMixin):
         nullable=False,
     )
     channel: Mapped[ChannelType] = mapped_column(
-        Enum(ChannelType, name="channel_type"),
+        Enum(ChannelType, name="channel_type", values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
     )
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[AppointmentStatus] = mapped_column(
-        Enum(AppointmentStatus, name="appointment_status"),
+        Enum(AppointmentStatus, name="appointment_status", values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
     )
     conversation_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("conversations.id"),
+        unique=True,
         nullable=False,
     )
 

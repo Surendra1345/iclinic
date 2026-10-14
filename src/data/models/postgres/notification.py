@@ -18,12 +18,12 @@ class Notification(Base, AuditMixin):
         nullable=False,
     )
     channel: Mapped[NotificationChannel] = mapped_column(
-        Enum(NotificationChannel, name="notification_channel"),
+        Enum(NotificationChannel, name="notification_channel", values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
     )
     recipient: Mapped[str] = mapped_column(String(100), nullable=False)
     status: Mapped[NotificationStatus] = mapped_column(
-        Enum(NotificationStatus, name="notification_status"),
+        Enum(NotificationStatus, name="notification_status", values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
     )
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

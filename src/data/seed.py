@@ -170,13 +170,30 @@ async def main(reset: bool = False):
                     f"[-] Required table public.{table} not found. Run Alembic migrations first."
                 )
 
-        # Optional reset: wipe seed data cleanly to reflect deletions and start fresh
+        # Optional safe reset: only clean seed-owned records without deleting operational appointments
         if reset:
-            print("[*] --reset detected: Clearing previous seed records...")
-            await connection.execute(
-                text("TRUNCATE TABLE slots, patients, appointment_types, providers, locations RESTART IDENTITY CASCADE")
-            )
-            print("[+] Seed tables truncated and IDs reset to 1.\n")
+            print("[*] --reset detected: Safely clearing seed records...")
+            app_count_res = await connection.execute(text("SELECT COUNT(*) FROM appointments"))
+            app_count = int(app_count_res.scalar() or 0)
+
+            if app_count > 0:
+                print(f"[!] Warning: Found {app_count} operational appointments in database.")
+                print("    Preserving booked records. Cleaning unbooked seed slots & patients...")
+                await connection.execute(
+                    text("DELETE FROM slots WHERE created_by = :seed_by AND id NOT IN (SELECT slot_id FROM appointments)"),
+                    {"seed_by": SEED_BY},
+                )
+                await connection.execute(
+                    text("DELETE FROM patients WHERE created_by = :seed_by AND id NOT IN (SELECT patient_id FROM appointments)"),
+                    {"seed_by": SEED_BY},
+                )
+            else:
+                await connection.execute(text("DELETE FROM slots WHERE created_by = :seed_by"), {"seed_by": SEED_BY})
+                await connection.execute(text("DELETE FROM patients WHERE created_by = :seed_by"), {"seed_by": SEED_BY})
+                await connection.execute(text("DELETE FROM appointment_types WHERE created_by = :seed_by"), {"seed_by": SEED_BY})
+                await connection.execute(text("DELETE FROM providers WHERE created_by = :seed_by"), {"seed_by": SEED_BY})
+                await connection.execute(text("DELETE FROM locations WHERE created_by = :seed_by"), {"seed_by": SEED_BY})
+            print("[+] Seed records cleaned safely without touching operational data.\n")
 
         # 2. Seed Locations
         location_ids = {}
@@ -272,7 +289,7 @@ async def main(reset: bool = False):
 
                     slot_result = await connection.execute(
                         text("""
-                            SELECT id FROM slots
+                            SELECT id, end_time FROM slots
                             WHERE source_ref = :source_ref
                                OR (provider_id = :provider_id AND start_time = :start_time)
                             LIMIT 1
@@ -285,6 +302,18 @@ async def main(reset: bool = False):
                     )
                     existing_slot = slot_result.first()
                     if existing_slot:
+                        # Reconcile slot end_time if updated in seed definitions and unbooked
+                        existing_slot_id, existing_end_time = existing_slot[0], existing_slot[1]
+                        if existing_end_time != end_time:
+                            is_booked = (await connection.execute(
+                                text("SELECT 1 FROM appointments WHERE slot_id = :slot_id LIMIT 1"),
+                                {"slot_id": existing_slot_id},
+                            )).first()
+                            if not is_booked:
+                                await connection.execute(
+                                    text("UPDATE slots SET end_time = :end_time, updated_at = NOW(), updated_by = :updated_by WHERE id = :id"),
+                                    {"id": existing_slot_id, "end_time": end_time, "updated_by": SEED_BY},
+                                )
                         continue
 
                     await connection.execute(
@@ -324,6 +353,22 @@ async def main(reset: bool = False):
         print("==========================================\n")
 
 
+def mask_phone(phone_str: str) -> str:
+    """Masks phone numbers for preview output."""
+    if len(phone_str) > 7:
+        return phone_str[:5] + "****" + phone_str[-2:]
+    return phone_str
+
+
+def mask_email(email_str: str) -> str:
+    """Masks email addresses for preview output."""
+    if "@" in email_str:
+        user_part, domain_part = email_str.split("@", 1)
+        prefix = user_part[:2] if len(user_part) >= 2 else user_part
+        return prefix + "***@" + domain_part
+    return email_str
+
+
 def preview_slots():
     """Prints a terminal preview of the data to be seeded without touching the database."""
     print("\n=======================================================")
@@ -341,9 +386,9 @@ def preview_slots():
     for appointment_name, duration_minutes, _ in APPOINTMENT_TYPES:
         print(f"   * {appointment_name} ({duration_minutes} mins)")
 
-    print(f"\n[+] PATIENTS ({len(PATIENTS)}):")
+    print(f"\n[+] PATIENTS ({len(PATIENTS)}) [Masked for security]:")
     for full_name, date_of_birth, phone, email in PATIENTS:
-        print(f"   * {full_name} (DOB: {date_of_birth}, Phone: {phone}, Email: {email})")
+        print(f"   * {full_name} (DOB: {date_of_birth}, Phone: {mask_phone(phone)}, Email: {mask_email(email)})")
 
     print(f"\n[+] SLOTS SCHEDULE ({DATE_START} to {DATE_END}):")
     print("   Daily Windows: 09:00-12:00 & 14:00-17:00 IST (30-min intervals)\n")

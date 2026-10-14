@@ -18,8 +18,8 @@ class AuditMixin:
         onupdate=func.now(),
         nullable=False,
     )
-    created_by: Mapped[str] = mapped_column(String(100), default="system", nullable=False)
-    updated_by: Mapped[str] = mapped_column(String(100), default="system", nullable=False)
+    created_by: Mapped[str] = mapped_column(String(100), server_default="system", nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(100), server_default="system", nullable=False)
 
 
 __all__ = ["Base", "AuditMixin"]
