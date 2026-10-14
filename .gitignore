@@ -35,7 +35,6 @@ env/
 # Environment variables & secrets
 .env
 .env.*
-!.env.example
 
 # IDEs & code editors
 .vscode/
