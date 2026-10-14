@@ -112,7 +112,7 @@ SESSION_WINDOWS = [(time(9, 0), time(12, 0)), (time(14, 0), time(17, 0))]
 SLOT_MINUTES = 30
 
 
-async def get_or_create(connection, table: str, key_column: str, key_value, values: dict) -> int:
+async def get_or_create(connection, table: str, key_column: str, key_value, values: dict):
     """Helper to fetch existing row ID or insert if missing (idempotent + updates changes)."""
     query_result = await connection.execute(
         text(f"SELECT id FROM {table} WHERE {key_column} = :key_value ORDER BY id LIMIT 1"),
@@ -120,7 +120,7 @@ async def get_or_create(connection, table: str, key_column: str, key_value, valu
     )
     row = query_result.first()
     if row:
-        record_id = int(row[0])
+        record_id = row[0]
         update_columns = [f"{column_name} = :{column_name}" for column_name in values.keys() if column_name != key_column]
         if update_columns:
             row_values = dict(values)
@@ -143,7 +143,7 @@ async def get_or_create(connection, table: str, key_column: str, key_value, valu
         text(f"INSERT INTO {table} ({sql_columns}) VALUES ({sql_values}) RETURNING id"),
         row_values,
     )
-    return int(insert_result.scalar_one())
+    return insert_result.scalar_one()
 
 
 def iter_slots(day: date):

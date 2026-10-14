@@ -67,30 +67,32 @@ src/
 
 ## 🗄️ Database Architecture
 
-The data layer is organized around three core operational domains: **Clinic Scheduling**, **Patient & AI Conversations**, and **Telephony & Bookings**.
+The data layer is organized around three core operational domains: **Clinic Scheduling**, **Patient & AI Conversations**, and **Bookings, Audits & Notifications**. All primary and foreign keys use **UUID (v4)** generated automatically via PostgreSQL's native `gen_random_uuid()` for distributed security and unpredictable identifiers.
 
 ### 1. Clinic & Scheduling
-* **Locations**: Manages clinic branch details, physical addresses, and operational status.
-* **Providers**: Represents doctors and clinicians associated with specific clinic locations.
-* **Appointment Types**: Defines consultation categories (such as routine checkups or specialist visits) along with their default durations.
-* **Slots**: Represents provider availability time blocks that patients can reserve.
+* **Locations**: Manages clinic branch details, physical addresses, and operational status (`UUID`).
+* **Providers**: Represents doctors and clinicians associated with specific clinic locations (`UUID`).
+* **Appointment Types**: Defines consultation categories (such as routine checkups or specialist visits) along with their default durations (`UUID`).
+* **Slots**: Represents provider availability time blocks that patients can reserve (`UUID`). Enforces `end_time > start_time` and strict uniqueness per provider and start time.
 
 ### 2. Patient Identity & AI Conversations
-* **Patients**: Stores patient profiles, phone numbers, emails, and date of birth used for identity verification.
-* **Conversations**: Tracks live AI phone calls and chat interactions, preserving dialogue states, message transcripts, and collected patient details.
+* **Patients**: Stores patient profiles, phone numbers, optional emails, and date of birth used for voice identity verification (`UUID`).
+* **Conversations**: Tracks live AI phone calls and chat interactions, preserving dialogue states, message transcripts, and collected patient details (`UUID`).
 
-### 3. Bookings, Telephony & Alerts
-* **Outbound Call Requests**: Manages jobs queued by the system to initiate automated outbound phone calls.
-* **Outbound Calls**: Records individual telephony dialing attempts, provider Call SIDs, and call status lifecycle events.
-* **Appointments**: Represents confirmed bookings linking the patient, reserved time slot, consultation type, and originating conversation.
-* **Notifications**: Handles delivery of SMS and email confirmation receipts and reminders to patients.
+### 3. Bookings, Telephony, Audits & Alerts
+* **Outbound Call Requests**: Manages jobs queued by the system to initiate automated outbound phone calls (`UUID`).
+* **Outbound Calls**: Records individual telephony dialing attempts, provider Call SIDs, and call status lifecycle events (`UUID`).
+* **Appointments**: Represents bookings linking the patient, slot, consultation type, and originating conversation (`UUID`).
+* **Appointment Cancellations**: Dedicated audit log recording patient-initiated cancellations, reason, and the phone conversation in which it occurred (`UUID`).
+* **Appointment Reschedules**: Dedicated audit log tracking patient-initiated reschedules, linking `old_appointment_id` to `new_appointment_id`, reason, and conversation (`UUID`).
+* **Notifications**: Handles delivery of SMS and email confirmation receipts and reminders to patients (`UUID`).
 
 ---
 
 ### Core Enums
 
 * **`ChannelType`**: `voice`, `outbound_call`, `chat`
-* **`AppointmentStatus`**: `booked`
+* **`AppointmentStatus`**: `booked`, `cancelled`, `rescheduled`
 * **`ConversationState`**: `started`, `identifying_patient`, `collecting_details`, `suggesting_slots`, `reconfirming`, `booked`, `confirmation_sent`, `abandoned`, `failed`, `handed_to_front_desk`, `no_answer`, `busy`, `retry_scheduled`
 * **`OutcomeType`**: `booked`, `abandoned`, `failed`, `handed_to_front_desk`, `not_reached`, `wrong_person`
 * **`ConfirmationStatusType`**: `pending`, `sent`, `retrying`, `failed`, `flagged`
@@ -103,15 +105,16 @@ The data layer is organized around three core operational domains: **Clinic Sche
 
 ### Model Architecture Principles
 
+* **Universal UUID Primary & Foreign Keys**: All tables use native `UUID(as_uuid=True)` with server-side `gen_random_uuid()` defaults for predictable security and collision prevention.
 * **Directional Foreign Keys Only**: Relationships exist only where a foreign key column is defined (e.g. `Appointment` points to `Patient`, `Slot`, `AppointmentType`, and `Conversation`).
 * **Zero Circular Imports**: Independent tables (like `Patient`, `Location`, `AppointmentType`) have zero imports of other models.
-* **No Redundant Collections**: Tables avoid heavy reverse collections that load thousands of historical records into memory.
-* **Database-Level Concurrency Protection**:
-  * **Double Booking Prevention**: Enforced via `unique=True` on `appointments.slot_id` and unique `(provider_id, start_time)` on `slots`.
+* **Database-Level Concurrency & Integrity Protection**:
+  * **Double Booking Prevention with Slot Re-use**: Enforced via partial unique index `uq_active_appointment_slot` on `appointments.slot_id WHERE status = 'booked'`. Once an appointment is cancelled or rescheduled, its slot is freed immediately for other patients.
+  * **Reschedule Self-Reference Guard**: Check constraint `old_appointment_id <> new_appointment_id` and unique `(old_appointment_id, new_appointment_id)` prevent cyclical self-rescheduling.
   * **Webhook Idempotency**: Enforced via `unique=True` on `outbound_calls.provider_call_id` and composite uniqueness on `(call_request_id, attempt_number)`.
-  * **Open Request Deduplication**: Partial unique index on `outbound_call_requests.number_to_call` preventing concurrent open outreach jobs for the same recipient.
+  * **Open Request Deduplication**: Partial unique index on `outbound_call_requests.number_to_call WHERE status IN ('waiting', 'processing', 'started')` preventing duplicate outbound calls to the same patient while a call is active.
   * **Patient Identity Fast Lookups**: Composite index on `patients(full_name, date_of_birth)`.
-  * **Cascade Protection**: Slots enforce `RESTRICT` on provider deletion so doctor availability and booking histories are never accidentally purged.
+  * **Referential Integrity**: All foreign keys enforce `ON DELETE RESTRICT` to guarantee no accidental deletion of medical or booking records.
 
 ---
 

@@ -1,5 +1,6 @@
+import uuid
 from typing import Optional
-from sqlalchemy import BigInteger, Enum, ForeignKey, Text
+from sqlalchemy import Enum, ForeignKey, Index, Text, UUID, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.constants.enums import AppointmentStatus, ChannelType
@@ -9,35 +10,46 @@ from src.data.models.postgres.base import AuditMixin, Base
 class Appointment(Base, AuditMixin):
     __tablename__ = "appointments"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    patient_id: Mapped[int] = mapped_column(
-        BigInteger,
-        ForeignKey("patients.id"),
-        nullable=False,
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
     )
-    slot_id: Mapped[int] = mapped_column(
-        BigInteger,
-        ForeignKey("slots.id"),
-        unique=True,
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("patients.id", ondelete="RESTRICT"),
         nullable=False,
+        index=True,
     )
-    appointment_type_id: Mapped[int] = mapped_column(
-        BigInteger,
-        ForeignKey("appointment_types.id"),
+    slot_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("slots.id", ondelete="RESTRICT"),
         nullable=False,
+        index=True,
+    )
+    appointment_type_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("appointment_types.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
     )
     channel: Mapped[ChannelType] = mapped_column(
         Enum(ChannelType, name="channel_type", values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
+        index=True,
     )
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[AppointmentStatus] = mapped_column(
         Enum(AppointmentStatus, name="appointment_status", values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
+        default=AppointmentStatus.BOOKED,
+        server_default=text("'booked'"),
+        index=True,
     )
-    conversation_id: Mapped[int] = mapped_column(
-        BigInteger,
-        ForeignKey("conversations.id"),
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("conversations.id", ondelete="RESTRICT"),
         unique=True,
         nullable=False,
     )
@@ -47,3 +59,13 @@ class Appointment(Base, AuditMixin):
     slot: Mapped["Slot"] = relationship("Slot")
     appointment_type: Mapped["AppointmentType"] = relationship("AppointmentType")
     conversation: Mapped["Conversation"] = relationship("Conversation")
+
+    __table_args__ = (
+        Index(
+            "uq_active_appointment_slot",
+            "slot_id",
+            unique=True,
+            postgresql_where=text("status = 'booked'"),
+        ),
+        Index("idx_appointments_channel_status_created", "channel", "status", "created_at"),
+    )
