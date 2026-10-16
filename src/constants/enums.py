@@ -7,11 +7,17 @@ class ChannelType(str, Enum):
     CHAT = "chat"
 
 
+class SlotStatus(str, Enum):
+    AVAILABLE = "available"
+    RESERVED = "reserved"
+    BOOKED = "booked"
+
+
 class AppointmentStatus(str, Enum):
     BOOKED = "booked"
-    CANCELLED = "cancelled"
     RESCHEDULED = "rescheduled"
-
+    CANCELLED = "cancelled"
+    COMPLETED = "completed"
 
 
 class ConversationState(str, Enum):
@@ -19,9 +25,9 @@ class ConversationState(str, Enum):
     IDENTIFYING_PATIENT = "identifying_patient"
     COLLECTING_DETAILS = "collecting_details"
     SUGGESTING_SLOTS = "suggesting_slots"
+    SLOT_RESERVED = "slot_reserved"
     RECONFIRMING = "reconfirming"
     BOOKED = "booked"
-    CONFIRMATION_SENT = "confirmation_sent"
     ABANDONED = "abandoned"
     FAILED = "failed"
     HANDED_TO_FRONT_DESK = "handed_to_front_desk"
@@ -74,3 +80,8 @@ class NotificationStatus(str, Enum):
     PENDING = "pending"
     SENT = "sent"
     FAILED = "failed"
+
+
+class PatientSource(str, Enum):
+    ASSISTANT = "assistant"
+    FRONT_DESK = "front_desk"

@@ -1,3 +1,4 @@
+from data.models.postgres.location import Location
 import uuid
 from typing import Optional
 from sqlalchemy import Boolean, ForeignKey, Index, String, UUID, text

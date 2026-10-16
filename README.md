@@ -73,11 +73,11 @@ The data layer is organized around three core operational domains: **Clinic Sche
 * **Locations**: Manages clinic branch details, physical addresses, and operational status (`UUID`).
 * **Providers**: Represents doctors and clinicians associated with specific clinic locations (`UUID`).
 * **Appointment Types**: Defines consultation categories (such as routine checkups or specialist visits) along with their default durations (`UUID`).
-* **Slots**: Represents provider availability time blocks that patients can reserve (`UUID`). Enforces `end_time > start_time` and strict uniqueness per provider and start time.
+* **Slots**: Represents provider availability time blocks (`UUID`). Enforces `end_time > start_time`, strict uniqueness per provider and start time, slot lifecycle tracking (`status`: `available`, `reserved`, `booked`), and temporary active-call holds (`reserved_until`).
 
 ### 2. Patient Identity & AI Conversations
-* **Patients**: Stores patient profiles, phone numbers, optional emails, and date of birth used for voice identity verification (`UUID`).
-* **Conversations**: Tracks live AI phone calls and chat interactions, preserving dialogue states, message transcripts, and collected patient details (`UUID`).
+* **Patients**: Stores patient profiles, phone numbers, optional emails, origin (`source`: `assistant`, `front_desk`), and date of birth used for voice identity verification (`UUID`).
+* **Conversations**: Tracks live AI phone calls and chat interactions, preserving dialogue states, message transcripts, collected patient details, and clinical identity verification timestamps (`identity_verified_at`) (`UUID`).
 
 ### 3. Bookings, Telephony, Audits & Alerts
 * **Outbound Call Requests**: Manages jobs queued by the system to initiate automated outbound phone calls (`UUID`).
@@ -92,8 +92,10 @@ The data layer is organized around three core operational domains: **Clinic Sche
 ### Core Enums
 
 * **`ChannelType`**: `voice`, `outbound_call`, `chat`
-* **`AppointmentStatus`**: `booked`, `cancelled`, `rescheduled`
-* **`ConversationState`**: `started`, `identifying_patient`, `collecting_details`, `suggesting_slots`, `reconfirming`, `booked`, `confirmation_sent`, `abandoned`, `failed`, `handed_to_front_desk`, `no_answer`, `busy`, `retry_scheduled`
+* **`SlotStatus`**: `available`, `reserved`, `booked`
+* **`PatientSource`**: `assistant`, `front_desk`
+* **`AppointmentStatus`**: `booked`, `rescheduled`, `cancelled`, `completed`
+* **`ConversationState`**: `started`, `identifying_patient`, `collecting_details`, `suggesting_slots`, `slot_reserved`, `reconfirming`, `booked`, `abandoned`, `failed`, `handed_to_front_desk`, `no_answer`, `busy`, `retry_scheduled`
 * **`OutcomeType`**: `booked`, `abandoned`, `failed`, `handed_to_front_desk`, `not_reached`, `wrong_person`
 * **`ConfirmationStatusType`**: `pending`, `sent`, `retrying`, `failed`, `flagged`
 * **`OutboundCallRequestStatus`**: `waiting`, `processing`, `started`, `completed`, `cancelled`, `expired`, `failed`
