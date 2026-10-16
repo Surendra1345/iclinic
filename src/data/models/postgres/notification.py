@@ -1,3 +1,4 @@
+from data.models.postgres.appointment import Appointment
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional

@@ -1,3 +1,4 @@
+from data.models.postgres.conversation import Conversation
 import uuid
 from datetime import datetime
 from typing import Optional

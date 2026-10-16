@@ -1,3 +1,7 @@
+from data.models.postgres.conversation import Conversation
+from data.models.postgres.appointment_type import AppointmentType
+from data.models.postgres.slot import Slot
+from data.models.postgres.patient import Patient
 import uuid
 from typing import Optional
 from sqlalchemy import Enum, ForeignKey, Index, Text, UUID, text

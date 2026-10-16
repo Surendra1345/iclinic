@@ -1,3 +1,4 @@
+from data.models.postgres.patient import Patient
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -34,6 +35,7 @@ class Conversation(Base, AuditMixin):
         nullable=True,
         index=True,
     )
+    identity_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     current_state: Mapped[ConversationState] = mapped_column(
