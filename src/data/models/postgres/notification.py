@@ -1,8 +1,8 @@
-from data.models.postgres.appointment import Appointment
+from src.data.models.postgres.appointment import Appointment
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, UUID, UniqueConstraint, text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, UUID, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -45,7 +45,3 @@ class Notification(Base, AuditMixin):
 
     # Relationships
     appointment: Mapped["Appointment"] = relationship("Appointment")
-
-    __table_args__ = (
-        UniqueConstraint("appointment_id", "channel", "recipient", name="uq_notifications_app_channel_recip"),
-    )

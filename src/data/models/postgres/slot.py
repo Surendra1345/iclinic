@@ -1,4 +1,4 @@
-from data.models.postgres.provider import Provider
+from src.data.models.postgres.provider import Provider
 import uuid
 from datetime import datetime
 from typing import Optional
