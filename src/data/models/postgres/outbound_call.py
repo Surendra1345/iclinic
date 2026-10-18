@@ -1,5 +1,5 @@
-from data.models.postgres.conversation import Conversation
-from data.models.postgres.outbound_call_request import OutboundCallRequest
+from src.data.models.postgres.conversation import Conversation
+from src.data.models.postgres.outbound_call_request import OutboundCallRequest
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional

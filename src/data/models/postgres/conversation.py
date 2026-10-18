@@ -1,4 +1,4 @@
-from data.models.postgres.patient import Patient
+from src.data.models.postgres.patient import Patient
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional

@@ -1,7 +1,7 @@
-from data.models.postgres.conversation import Conversation
-from data.models.postgres.appointment_type import AppointmentType
-from data.models.postgres.slot import Slot
-from data.models.postgres.patient import Patient
+from src.data.models.postgres.conversation import Conversation
+from src.data.models.postgres.appointment_type import AppointmentType
+from src.data.models.postgres.slot import Slot
+from src.data.models.postgres.patient import Patient
 import uuid
 from typing import Optional
 from sqlalchemy import Enum, ForeignKey, Index, Text, UUID, text
@@ -68,6 +68,12 @@ class Appointment(Base, AuditMixin):
         Index(
             "uq_active_appointment_slot",
             "slot_id",
+            unique=True,
+            postgresql_where=text("status = 'booked'"),
+        ),
+        Index(
+            "uq_one_active_per_patient",
+            "patient_id",
             unique=True,
             postgresql_where=text("status = 'booked'"),
         ),
