@@ -17,15 +17,14 @@ services:
       timeout: 5s
       retries: 5
 
-  # Containerized FastAPI service (optional: run with --profile full)
-  app:
+  backend:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
-    container_name: iclinic-app
+    container_name: iclinic-backend
     restart: unless-stopped
     env_file:
-      - .env
+      - ./backend/.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -34,8 +33,19 @@ services:
       DB_ECHO: "false"
     ports:
       - "8000:8000"
-    profiles:
-      - full
+    volumes:
+      - ./backend/src:/app/src
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: iclinic-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
 
 volumes:
   postgres_data:
