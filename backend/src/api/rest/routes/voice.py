@@ -7,8 +7,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from html import escape
 from typing import Optional
-from urllib.parse import urlunsplit
-from uuid import uuid4
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -32,22 +31,65 @@ from src.data.repositories.patient_repository import PatientRepository
 from src.services.sarvam_service import SarvamService
 from src.services.conversation_turn_service import conversation_turn_service
 from src.services.twilio_service import TwilioService
+from src.services.audio_storage_service import audio_storage_service
 from src.observability.context import call_id_context
 
 logger = logging.getLogger(__name__)
 
 sarvam_service = SarvamService()
+
+
+async def _run_outbound_turn_in_isolated_session(*, call_sid: str, patient_text: str):
+    """Keep a timed-out Twilio turn from committing partial DB work."""
+    async with AsyncSessionLocal() as turn_session:
+        try:
+            return await conversation_turn_service.run_outbound_turn(
+                turn_session,
+                call_sid=call_sid,
+                patient_text=patient_text,
+            )
+        except BaseException:
+            await turn_session.rollback()
+            raise
+
+
+async def _persist_outbound_timeout_reply(call_sid: str, reply: str) -> None:
+    """Persist a timeout reply after the cancelled action session is gone."""
+    async with AsyncSessionLocal() as session:
+        call = await OutboundCallRepository(session).get_by_provider_call_id(call_sid)
+        if not call:
+            return
+        await conversation_turn_service.save_message(
+            session,
+            call.conversation_id,
+            role="agent",
+            content=reply,
+            metadata={"event_type": "timeout", "stage": "agent_turn"},
+        )
 twilio_service = TwilioService()
 
 # ?????? 1. In-Memory 8kHz WAV Cache & Call Metadata Store ???????????????????????????????????????????????????????????????????????????
-_audio_cache: dict[str, tuple[bytes, float]] = {}
-_AUDIO_TTL_SECONDS = 15 * 60  # 15 minutes TTL
-
-
 def _get_clean_domain() -> str:
-    domain = settings.PUBLIC_DOMAIN or settings.NGROK_URL or "foam-jury-quality.ngrok-free.dev"
-    domain = domain.replace("https://", "").replace("http://", "").replace("wss://", "").replace("ws://", "").rstrip("/")
-    return domain
+    configured = (settings.PUBLIC_DOMAIN or settings.NGROK_URL or "").strip()
+    if not configured:
+        raise HTTPException(
+            status_code=503,
+            detail="Public voice webhook domain is not configured.",
+        )
+    parsed = urlsplit(configured if "://" in configured else f"https://{configured}")
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+        or parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Public voice webhook domain must be a reachable HTTPS host without a path.",
+        )
+    return parsed.netloc
 
 
 async def _create_sarvam_audio_url(text: str, language_code: str = "en-IN") -> Optional[str]:
@@ -56,13 +98,15 @@ async def _create_sarvam_audio_url(text: str, language_code: str = "en-IN") -> O
         return None
 
     try:
-        audio = await sarvam_service.text_to_speech(text.strip(), target_language_code=language_code)
+        audio = await asyncio.wait_for(
+            sarvam_service.text_to_speech(text.strip(), target_language_code=language_code),
+            timeout=settings.OUTBOUND_TTS_TIMEOUT_SECONDS,
+        )
         if not audio:
             logger.warning("Sarvam TTS returned empty audio; will use Twilio Polly fallback.")
             return None
 
-        audio_id = uuid4().hex
-        _audio_cache[audio_id] = (audio, time.time() + _AUDIO_TTL_SECONDS)
+        audio_id = await audio_storage_service.store(audio)
         clean_domain = _get_clean_domain()
         return f"https://{clean_domain}/twilio/audio/{audio_id}"
     except Exception as exc:
@@ -116,14 +160,27 @@ def _validate_twilio_webhook(request: Request, form_data: dict) -> None:
         validator.validate(candidate_url, form_data, signature)
         for candidate_url in candidate_urls
     )
-    if not signature and request.url.path in {"/twilio/voice", "/twilio/agent-turn"}:
-        # Some call-control requests are reaching this endpoint unsigned, even
-        # though Twilio signs the related status callbacks. The async route
-        # performs a second, provider-backed check against our own call record.
-        # This marker is consumed immediately after this validation call.
-        request.state.unsigned_voice_webhook = True
+    call_control_path = request.url.path in {"/twilio/voice", "/twilio/agent-turn"}
+    if not signature and call_control_path:
+        # Some call-control requests arrive unsigned. The route performs a
+        # second, provider-backed check against our own call record.
+        request.state.provider_verified_voice_webhook = True
         return
     if not valid:
+        if call_control_path:
+            # A valid Twilio call can still fail URL-signature validation when
+            # a tunnel/proxy rewrites the public URL. Keep the webhook behind
+            # the authenticated Twilio API verification below instead of
+            # dropping the entire call transcript or accepting it blindly.
+            logger.warning(
+                "Twilio call-control signature mismatch; attempting provider verification: path=%s configured_host=%s request_host=%s forwarded_host=%s",
+                request.url.path,
+                _get_clean_domain(),
+                request_host or "<missing>",
+                forwarded_host or "<missing>",
+            )
+            request.state.provider_verified_voice_webhook = True
+            return
         logger.warning(
             "Rejected Twilio webhook signature: path=%s signature_present=%s configured_host=%s request_host=%s forwarded_host=%s content_type=%s parameter_keys=%s",
             request.url.path,
@@ -138,7 +195,7 @@ def _validate_twilio_webhook(request: Request, form_data: dict) -> None:
 
 
 async def _verify_unsigned_voice_call(request: Request, form_data: dict) -> None:
-    """Allow unsigned call-control only when Twilio confirms our active call."""
+    """Allow call-control only when signed correctly or verified by Twilio's API."""
     call_sid = form_data.get("CallSid") or request.query_params.get("call_sid")
     account_sid = form_data.get("AccountSid")
     if isinstance(call_sid, list):
@@ -148,8 +205,16 @@ async def _verify_unsigned_voice_call(request: Request, form_data: dict) -> None
     if not call_sid or account_sid != settings.TWILIO_ACCOUNT_SID:
         raise HTTPException(status_code=403, detail="Unverified Twilio call.")
 
-    async with AsyncSessionLocal() as session:
-        call_record = await OutboundCallRepository(session).get_by_provider_call_id(str(call_sid))
+    call_record = None
+    # Twilio may fetch the webhook before the REST call-creation response is
+    # committed locally. Retry briefly so the valid call is not discarded.
+    for attempt in range(10):
+        async with AsyncSessionLocal() as session:
+            call_record = await OutboundCallRepository(session).get_by_provider_call_id(str(call_sid))
+        if call_record:
+            break
+        if attempt < 9:
+            await asyncio.sleep(0.2)
     if not call_record:
         raise HTTPException(status_code=403, detail="Unknown outbound call.")
 
@@ -181,7 +246,7 @@ async def _verify_unsigned_voice_call(request: Request, form_data: dict) -> None
         logger.warning("Unsigned Twilio webhook did not match an active clinic call: call_sid=%s", call_sid)
         raise HTTPException(status_code=403, detail="Unverified Twilio call.")
 
-    logger.warning("Accepted unsigned call-control webhook after Twilio API verification: call_sid=%s path=%s", call_sid, request.url.path)
+    logger.warning("Accepted call-control webhook after Twilio API verification: call_sid=%s path=%s", call_sid, request.url.path)
 
 
 async def _read_twilio_form(request: Request) -> dict:
@@ -304,7 +369,14 @@ async def trigger_outbound_call(payload: TriggerCallRequest):
         call_request = await outbound_repo.create_request(
             conversation_id=conversation.id,
             phone=clean_phone,
-            expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+            expires_at=datetime.now(timezone.utc) + timedelta(
+                minutes=max(
+                    15,
+                    settings.OUTBOUND_CALL_RETRY_DELAY_MINUTES
+                    * max(1, settings.OUTBOUND_CALL_MAX_ATTEMPTS - 1)
+                    + 10,
+                )
+            ),
         )
         call_request_id = call_request.id
         await session.commit()
@@ -371,17 +443,12 @@ twiml_router = APIRouter(prefix="/twilio", tags=["Twilio Voice Webhooks"])
 @twiml_router.get("/audio/{audio_id}")
 async def get_sarvam_audio(audio_id: str):
     """Serves Sarvam generated 8kHz WAV audio to Twilio telephone line."""
-    now = time.time()
-    for cached_id, (_, expires_at) in list(_audio_cache.items()):
-        if expires_at <= now:
-            _audio_cache.pop(cached_id, None)
-
-    cached = _audio_cache.get(audio_id)
-    if not cached:
+    audio = await audio_storage_service.get(audio_id)
+    if audio is None:
         raise HTTPException(status_code=404, detail="Audio expired or not found.")
 
     return Response(
-        content=cached[0],
+        content=audio,
         media_type="audio/wav",
         headers={
             "Cache-Control": "public, max-age=600",
@@ -399,7 +466,7 @@ async def initial_call_webhook(request: Request):
     request_started_at = time.perf_counter()
     form_data = await _read_twilio_form(request)
     _validate_twilio_webhook(request, form_data)
-    if getattr(request.state, "unsigned_voice_webhook", False):
+    if getattr(request.state, "provider_verified_voice_webhook", False):
         await _verify_unsigned_voice_call(request, form_data)
 
     call_sid = (
@@ -409,12 +476,19 @@ async def initial_call_webhook(request: Request):
         or "CALL"
     )
     call_id_context.set(call_sid)
-    async with AsyncSessionLocal() as session:
-        outbound_repo = OutboundCallRepository(session)
-        call_record = await outbound_repo.get_by_provider_call_id(call_sid)
-        if not call_record:
-            raise HTTPException(status_code=404, detail="Outbound call was not found.")
-        to_phone = call_record.number_called
+    call_record = None
+    for attempt in range(10):
+        async with AsyncSessionLocal() as session:
+            outbound_repo = OutboundCallRepository(session)
+            call_record = await outbound_repo.get_by_provider_call_id(call_sid)
+        if call_record:
+            break
+        if attempt < 9:
+            await asyncio.sleep(0.2)
+    if not call_record:
+        logger.error("Outbound call record was not available after retry: call_sid=%s", call_sid)
+        raise HTTPException(status_code=404, detail="Outbound call was not found.")
+    to_phone = call_record.number_called
 
     greeting_text = (
         f"Hello! Thank you for answering. This is {settings.AGENT_NAME} calling from {settings.CLINIC_NAME}. "
@@ -429,10 +503,9 @@ async def initial_call_webhook(request: Request):
                 call_record.conversation_id,
                 {"call_sid": call_sid, "patient_phone": to_phone},
             )
-            await convo_repo.append_message(
-                call_record.conversation_id,
-                role="agent",
-                content=greeting_text,
+            await conversation_turn_service.save_message(
+                session, call_record.conversation_id,
+                role="agent", content=greeting_text,
             )
         logger.info(
             "Persisted initial greeting for call_sid=%s conversation_id=%s in %.3fs",
@@ -489,7 +562,7 @@ async def handle_agent_turn(request: Request):
     request_started_at = time.perf_counter()
     form_data = await _read_twilio_form(request)
     _validate_twilio_webhook(request, form_data)
-    if getattr(request.state, "unsigned_voice_webhook", False):
+    if getattr(request.state, "provider_verified_voice_webhook", False):
         await _verify_unsigned_voice_call(request, form_data)
 
     call_sid = (
@@ -528,29 +601,40 @@ async def handle_agent_turn(request: Request):
         return Response(content=twiml, media_type="application/xml")
 
     user_utterance = str(speech_result).strip()
-    logger.info(f"Patient ({call_sid}) said: '{user_utterance}' (confidence: {confidence})")
+    logger.info(
+        "Patient utterance received: call_sid=%s length=%d confidence=%s",
+        call_sid,
+        len(user_utterance),
+        confidence,
+    )
 
     # 2. Run the shared agent-turn service used by all voice transports.
     turn_started_at = time.perf_counter()
-    async with AsyncSessionLocal() as session:
-        try:
-            turn = await conversation_turn_service.run_outbound_turn(
-                session,
+    try:
+        turn = await asyncio.wait_for(
+            _run_outbound_turn_in_isolated_session(
                 call_sid=call_sid,
                 patient_text=user_utterance,
-            )
-            agent_speech = turn.speech
-            is_completed = turn.completed
-            handoff_required = turn.handoff_required
-
-        except LookupError as e:
-            logger.error("Unable to load outbound conversation for %s: %s", call_sid, e)
-            raise HTTPException(status_code=404, detail=str(e)) from e
-        except Exception as e:
-            logger.error(f"Outbound turn execution error: {e}")
-            agent_speech = "I apologize, let me connect you with our front desk receptionist."
-            is_completed = True
-            handoff_required = True
+            ),
+            timeout=settings.OUTBOUND_CALL_TURN_TIMEOUT_SECONDS,
+        )
+        agent_speech = turn.speech
+        is_completed = turn.completed
+        handoff_required = turn.handoff_required
+    except LookupError as e:
+        logger.error("Unable to load outbound conversation for %s: %s", call_sid, e)
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except asyncio.TimeoutError:
+        logger.warning("Outbound turn timed out: call_sid=%s", call_sid)
+        agent_speech = "I am sorry, this is taking longer than expected. Let me connect you with our front desk."
+        await _persist_outbound_timeout_reply(call_sid, agent_speech)
+        is_completed = True
+        handoff_required = True
+    except Exception as e:
+        logger.error(f"Outbound turn execution error: {e}")
+        agent_speech = "I apologize, let me connect you with our front desk receptionist."
+        is_completed = True
+        handoff_required = True
 
     logger.info(f"Agent replied for {call_sid}: '{agent_speech}' (completed: {is_completed}, handoff: {handoff_required})")
     logger.info(
@@ -661,29 +745,35 @@ async def call_status_callback(request: Request):
                     },
                 )
                 if call_record and normalized_status in {"no-answer", "busy", "failed", "canceled"}:
-                    terminal_state = {
+                    will_retry = bool(
+                        normalized_status in {"no-answer", "busy"}
+                        and call_record.next_retry_at
+                    )
+                    next_state = ConversationState.RETRY_SCHEDULED if will_retry else {
                         "no-answer": ConversationState.NO_ANSWER,
                         "busy": ConversationState.BUSY,
                         "failed": ConversationState.FAILED,
                         "canceled": ConversationState.ABANDONED,
                     }[normalized_status]
-                    terminal_outcome = (
-                        OutcomeType.NOT_REACHED
-                        if normalized_status in {"no-answer", "busy"}
-                        else OutcomeType.FAILED
-                    )
-                    await session.execute(
-                        update(Conversation)
-                        .where(
-                            Conversation.id == call_record.conversation_id,
-                            Conversation.ended_at.is_(None),
+                    convo = await session.get(Conversation, call_record.conversation_id)
+                    if convo and convo.ended_at is None:
+                        history = list(convo.state_history or [])
+                        history.append({"state": next_state.value, "at": datetime.now(timezone.utc).isoformat()})
+                        update_values = {"current_state": next_state, "state_history": history}
+                        if not will_retry:
+                            update_values.update(
+                                ended_at=datetime.now(timezone.utc),
+                                outcome=(
+                                    OutcomeType.NOT_REACHED
+                                    if normalized_status in {"no-answer", "busy"}
+                                    else OutcomeType.FAILED
+                                ),
+                            )
+                        await session.execute(
+                            update(Conversation)
+                            .where(Conversation.id == call_record.conversation_id)
+                            .values(**update_values)
                         )
-                        .values(
-                            ended_at=datetime.now(timezone.utc),
-                            current_state=terminal_state,
-                            outcome=terminal_outcome,
-                        )
-                    )
                 await session.commit()
         except (TypeError, ValueError):
             logger.warning("Invalid Twilio call duration for %s: %s", call_sid, duration)

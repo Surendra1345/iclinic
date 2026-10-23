@@ -14,9 +14,9 @@ from sqlalchemy import func, select, update
 # pyrefly: ignore[missing-import]
 from sqlalchemy.orm import selectinload
 
-from src.constants.enums import AppointmentStatus, ChannelType, ConversationState, SlotStatus
-from src.control.agents.graph import agent_graph
-from src.control.agents.tools.registration_tools import is_greeting
+from src.config.settings import settings
+from src.constants.enums import AppointmentStatus, ChannelType, ConversationState, OutcomeType, SlotStatus
+from src.control.agents.tools.registration_tools import is_greeting, is_name_only_candidate
 from src.data.clients.postgres import AsyncSessionLocal
 from src.data.models.postgres.appointment import Appointment
 from src.data.models.postgres.conversation import Conversation
@@ -29,6 +29,7 @@ from src.data.repositories.conversation_repository import ConversationRepository
 from src.data.repositories.slot_repository import SlotRepository
 
 from src.services.sarvam_service import SarvamService
+from src.services.conversation_turn_service import conversation_turn_service
 
 logger = logging.getLogger(__name__)
 
@@ -38,18 +39,7 @@ sarvam_service = SarvamService()
 
 def _is_name_only_message(message: str) -> bool:
     """Identify a bare name so an unverified chat never enters booking logic."""
-    text = message.strip().lower()
-    words = text.rstrip(".!?").split()
-    excluded = {
-        "book", "appointment", "schedule", "doctor", "cancel", "reschedule",
-        "change", "help", "yes", "no", "hello", "hi", "hii", "hey",
-    }
-    return bool(
-        words
-        and len(words) <= 4
-        and not any(word in excluded for word in words)
-        and re.fullmatch(r"[a-z][a-z'???-]*(?:\s+[a-z][a-z'???-]*){0,3}[.!?]?", text)
-    )
+    return is_name_only_candidate(message)
 
 
 # ?????? Schemas ?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
@@ -77,6 +67,11 @@ class AppointmentResponse(BaseModel):
     created_at: str
 
 
+class UpdateForwardedRequest(BaseModel):
+    status: str = "contacted"  # "pending", "contacted", "resolved"
+    notes: Optional[str] = None
+
+
 # ?????? Frontdesk Endpoints ?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 
 @dashboard_router.get("/dashboard/stats")
@@ -96,6 +91,14 @@ async def get_dashboard_stats():
         total_patients = await session.scalar(select(func.count(Patient.id))) or 0
         total_locations = await session.scalar(select(func.count(Location.id))) or 0
         total_providers = await session.scalar(select(func.count(Provider.id))) or 0
+        forwarded_count = await session.scalar(
+            select(func.count(Conversation.id)).where(
+                (Conversation.current_state == ConversationState.HANDED_TO_FRONT_DESK)
+                | (Conversation.outcome == OutcomeType.HANDED_TO_FRONT_DESK)
+                | (Conversation.handoff_reason.isnot(None))
+                | (Conversation.collected_details["handoff_reason"].astext.isnot(None))
+            )
+        ) or 0
 
         return {
             "booked_count": booked_count,
@@ -105,6 +108,7 @@ async def get_dashboard_stats():
             "total_patients": total_patients,
             "total_locations": total_locations,
             "total_providers": total_providers,
+            "forwarded_count": forwarded_count,
         }
 
 
@@ -342,6 +346,181 @@ async def list_conversations(
         return {"conversations": results, "total": len(results)}
 
 
+@dashboard_router.get("/dashboard/forwarded-requests")
+async def list_forwarded_requests(
+    status: Optional[str] = Query(None, description="Filter: pending, contacted, resolved, or all"),
+    search: Optional[str] = Query(None, description="Search by patient name, phone, or doctor"),
+    limit: int = Query(100, ge=1, le=200),
+):
+    """
+    Returns patients whose conversations were forwarded/escalated to the front desk,
+    along with their contact details, active appointments, escalation reason, and chat transcripts.
+    """
+    async with AsyncSessionLocal() as session:
+        query = (
+            select(Conversation)
+            .options(selectinload(Conversation.patient))
+            .where(
+                (Conversation.current_state == ConversationState.HANDED_TO_FRONT_DESK)
+                | (Conversation.outcome == OutcomeType.HANDED_TO_FRONT_DESK)
+                | (Conversation.handoff_reason.isnot(None))
+                | (Conversation.collected_details["handoff_reason"].astext.isnot(None))
+            )
+            .order_by(Conversation.updated_at.desc(), Conversation.created_at.desc())
+        )
+        convos = (await session.scalars(query)).all()
+
+        results = []
+        pending_count = 0
+        for c in convos:
+            details = dict(c.collected_details or {})
+            identity_verified = bool(c.identity_verified_at)
+            p_name = (
+                details.get("patient_name") or details.get("registration_name")
+                or (c.patient.full_name if c.patient else "Unknown Patient")
+            ) if identity_verified else "Unverified patient"
+            p_phone = details.get("patient_phone") or (c.patient.phone if identity_verified and c.patient else "-")
+            p_email = details.get("patient_email") or (c.patient.email if identity_verified and c.patient else None)
+            p_dob = (
+                details.get("patient_dob") or details.get("registration_dob")
+                or (c.patient.date_of_birth.isoformat() if (c.patient and c.patient.date_of_birth) else None)
+            ) if identity_verified else None
+            p_id = (str(c.patient_id) if c.patient_id else details.get("patient_id")) if identity_verified else None
+
+            # Determine escalation status
+            escalation_status = details.get("escalation_status", "pending")
+            if escalation_status == "pending":
+                pending_count += 1
+
+            if status and status.lower() != "all" and escalation_status.lower() != status.lower():
+                continue
+
+            # Active appointment resolution:
+            active_info = details.get("active_appointment_details")
+            if not active_info and p_id:
+                try:
+                    p_uuid = uuid.UUID(str(p_id))
+                    appt_q = (
+                        select(Appointment)
+                        .options(
+                            selectinload(Appointment.slot)
+                            .selectinload(Slot.provider)
+                            .selectinload(Provider.location)
+                        )
+                        .where(
+                            Appointment.patient_id == p_uuid,
+                            Appointment.status.in_([AppointmentStatus.BOOKED, AppointmentStatus.RESCHEDULED]),
+                        )
+                        .order_by(Appointment.created_at.desc())
+                        .limit(1)
+                    )
+                    appt = (await session.scalars(appt_q)).first()
+                    if appt and appt.slot:
+                        prov = appt.slot.provider
+                        loc = prov.location if prov else None
+                        active_info = {
+                            "appointment_id": str(appt.id),
+                            "doctor_name": prov.full_name if prov else "Assigned Doctor",
+                            "specialty": prov.specialty if prov else "General Medicine",
+                            "location_name": loc.name if loc else "City Care Clinic",
+                            "location_address": loc.address if loc else "",
+                            "start_time": appt.slot.start_time.isoformat(),
+                            "status": appt.status.value,
+                        }
+                except Exception:
+                    pass
+
+            # Search filter
+            if search:
+                s_lower = search.lower().strip()
+                doc_name = (active_info.get("doctor_name") if active_info else "").lower()
+                reason_str = (c.handoff_reason or "").lower()
+                matches = (
+                    s_lower in p_name.lower()
+                    or s_lower in p_phone.lower()
+                    or s_lower in doc_name
+                    or s_lower in reason_str
+                )
+                if not matches:
+                    continue
+
+            # Format human-friendly reason
+            raw_reason = c.handoff_reason or details.get("handoff_reason") or "Patient requested front desk transfer"
+            clean_reason = raw_reason
+            if "sql" in raw_reason.lower() or "error" in raw_reason.lower() or "current transaction is aborted" in raw_reason.lower():
+                clean_reason = "System error during scheduling â€” requires frontdesk resolution"
+            elif "24-hour cutoff" in raw_reason.lower():
+                clean_reason = "Policy: Reschedule / cancellation within 24-hour cutoff window"
+            elif "already has an active appointment" in raw_reason.lower():
+                clean_reason = "Policy: Multiple active appointments requested"
+            elif "identity" in raw_reason.lower():
+                clean_reason = "Security: Failed identity verification"
+
+            forwarded_time = c.ended_at or c.updated_at or c.started_at or c.created_at
+
+            results.append({
+                "id": str(c.id),
+                "call_sid": details.get("call_sid") or str(c.id),
+                "channel": c.channel.value if hasattr(c.channel, "value") else str(c.channel),
+                "patient_id": p_id,
+                "patient_name": p_name,
+                "patient_phone": p_phone,
+                "patient_email": p_email,
+                "patient_dob": p_dob,
+                "identity_verified": identity_verified,
+                "callback_contact_unavailable": bool(details.get("callback_contact_unavailable")),
+                "awaiting_handoff_contact": bool(details.get("awaiting_handoff_contact")),
+                "reason": clean_reason,
+                "raw_reason": raw_reason,
+                "status": escalation_status,
+                "notes": details.get("escalation_notes"),
+                "resolved_at": details.get("escalation_resolved_at"),
+                "forwarded_at": forwarded_time.isoformat() if forwarded_time else None,
+                "active_appointment": active_info,
+                "messages": c.messages or [],
+                "total_messages": len(c.messages or []),
+            })
+
+            if len(results) >= limit:
+                break
+
+        return {
+            "forwarded_requests": results,
+            "total": len(results),
+            "pending_count": pending_count,
+        }
+
+
+@dashboard_router.patch("/dashboard/forwarded-requests/{conversation_id}")
+async def update_forwarded_request_status(
+    conversation_id: str,
+    req: UpdateForwardedRequest,
+):
+    """Updates the status and notes of a forwarded patient request."""
+    async with AsyncSessionLocal() as session:
+        try:
+            convo_uuid = uuid.UUID(conversation_id)
+        except ValueError:
+            return {"error": "Invalid conversation ID format"}
+
+        convo = await session.get(Conversation, convo_uuid)
+        if not convo:
+            return {"error": "Conversation record not found"}
+
+        details = dict(convo.collected_details or {})
+        details["escalation_status"] = req.status
+        if req.notes is not None:
+            details["escalation_notes"] = req.notes
+        if req.status in ("contacted", "resolved"):
+            details["escalation_resolved_at"] = datetime.utcnow().isoformat()
+        else:
+            details.pop("escalation_resolved_at", None)
+
+        convo.collected_details = details
+        await session.commit()
+        return {"status": "success", "escalation_status": req.status, "notes": details.get("escalation_notes")}
+
+
 # ?????? Patient Web Chat Endpoint ???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 
 @dashboard_router.post("/chat")
@@ -361,11 +540,18 @@ async def chat_with_clinic_agent(req: ChatMessageRequest):
                     channel=ChannelType.CHAT,
                     call_sid=session_id,
                 )
-            await conversation_repo.append_message(
-                conversation.id, role="patient", content=req.message.strip()
+            await conversation_turn_service.save_message(
+                session, conversation.id, role="agent", content=(
+                    f"Hello! Welcome to {settings.CLINIC_NAME}. How can I help you today? "
+                    "You can ask me to book, reschedule, cancel, or ask for available doctors and branches."
+                ),
             )
-            await conversation_repo.append_message(
-                conversation.id, role="agent", content=reply
+            await conversation_turn_service.save_message(
+                session, conversation.id, role="patient", content=req.message.strip()
+            )
+            await conversation_turn_service.save_message(
+                session, conversation.id, role="agent", content=reply,
+                metadata={"event_type": "unsupported_chat_language"},
             )
         return {
             "reply": reply,
@@ -437,8 +623,11 @@ async def chat_with_clinic_agent(req: ChatMessageRequest):
             "pending_intent": saved_details.get("pending_intent"),
             "intent": saved_details.get("intent"),
         }
+        last_agent_msg = next((m.get("content") for m in reversed(existing_conversation.messages or []) if m.get("role") == "agent"), "")
+        input_state["latest_agent_speech"] = last_agent_msg
         for field in (
             "patient_id",
+            "verify_attempts",
             "target_slot_id",
             "target_slot_details",
             "offered_slots",
@@ -448,114 +637,55 @@ async def chat_with_clinic_agent(req: ChatMessageRequest):
             "preferred_location",
             "preferred_doctor",
             "preferred_date",
+            "preferred_appointment_type",
+            "awaiting_followup_visit",
+            "followup_candidates",
+            "awaiting_followup_decision",
             "awaiting_preferred_date",
             "awaiting_patient_email",
+            "awaiting_cancel_confirmation",
+            "awaiting_change_action_choice",
+            "awaiting_handoff_contact",
+            "handoff_completed",
+            "frontdesk_alert_sent",
+            "handoff_reason",
+            "handoff_required",
+            "is_emergency",
         ):
             if field in saved_details:
                 input_state[field] = saved_details[field]
 
         try:
-            # Persist the incoming turn before invoking the agent so the live
-            # transcript and the context passed to the graph both include it.
-            await conversation_repo.append_message(
-                existing_conversation.id,
-                role="patient",
-                content=req.message.strip(),
-            )
-            if not input_state["is_verified"] and _is_name_only_message(req.message):
-                # Bypass checkpointed intent state for this privacy-sensitive
-                # turn. A bare name must ask for DOB before any booking lookup.
+            invoke_turn = None
+            specialty_branch_reply = False
+            if input_state.get("intent") == "faq_response" and input_state.get("preferred_specialty"):
+                from src.control.agents.nodes.booking_helpers import _match_branch
+                specialty_branch_reply = bool(_match_branch(req.message))
+
+            if (
+                not input_state["is_verified"]
+                and _is_name_only_message(req.message)
+                and not specialty_branch_reply
+            ):
+                # Preserve the privacy guard while routing persistence through the common turn service.
                 from src.control.agents.nodes.identity import identity_agent_node
 
-                result = await identity_agent_node(
-                    {**input_state, "is_verified": False}, session
-                )
-                result["intent"] = "identity"
-            else:
-                result = await agent_graph.ainvoke(
-                    input_state,
-                    config={"configurable": {"thread_id": session_id, "db": session}},
-                )
-            speech = result.get("latest_agent_speech") or "How can I help you with your appointment today?"
-            if result.get("booking_confirmed"):
-                await conversation_repo.record_action_outcome(
-                    existing_conversation.id,
-                    result.get("intent"),
-                )
-            await conversation_repo.append_message(
-                existing_conversation.id,
-                role="agent",
-                content=speech,
+                async def invoke_turn(state):
+                    result = await identity_agent_node({**state, "is_verified": False}, session)
+                    result["intent"] = "identity"
+                    return result
+
+            turn = await conversation_turn_service.run_turn(
+                session,
+                conversation_id=existing_conversation.id,
+                thread_id=session_id,
+                channel="chat",
+                patient_text=req.message.strip(),
+                input_state=input_state,
+                invoke=invoke_turn,
             )
-            persisted_fields = {
-                field: result[field]
-                for field in (
-                    "patient_id",
-                    "patient_name",
-                    "target_slot_id",
-                    "target_slot_details",
-                    "offered_slots",
-                    "active_appointment_id",
-                    "active_appointment_details",
-                    "preferred_specialty",
-                    "preferred_location",
-                    "preferred_doctor",
-                    "preferred_date",
-                    "awaiting_preferred_date",
-                    "awaiting_patient_email",
-                    "intent",
-                )
-                if field in result and result[field] is not None
-            }
-            # If target_slot_id was explicitly cleared to None, persist None
-            if "target_slot_id" in result and result["target_slot_id"] is None:
-                persisted_fields["target_slot_id"] = None
-                persisted_fields["target_slot_details"] = None
-            if "offered_slots" in result:
-                persisted_fields["offered_slots"] = result["offered_slots"]
-            if "preferred_doctor" in result and result["preferred_doctor"] is None:
-                persisted_fields["preferred_doctor"] = None
-            if "preferred_location" in result and result["preferred_location"] is None:
-                persisted_fields["preferred_location"] = None
-            if "preferred_specialty" in result and result["preferred_specialty"] is None:
-                persisted_fields["preferred_specialty"] = None
-            if "awaiting_preferred_date" in result:
-                persisted_fields["awaiting_preferred_date"] = result["awaiting_preferred_date"]
-            if "awaiting_patient_email" in result:
-                persisted_fields["awaiting_patient_email"] = result["awaiting_patient_email"]
-            if "awaiting_identity_verification" in result:
-                persisted_fields["awaiting_identity_verification"] = result["awaiting_identity_verification"]
-            if "pending_intent" in result:
-                persisted_fields["pending_intent"] = result["pending_intent"]
-            if result.get("patient_phone"):
-                persisted_fields["patient_phone"] = result["patient_phone"]
-            if result.get("patient_email"):
-                persisted_fields["patient_email"] = result["patient_email"]
-            if result.get("patient_name"):
-                persisted_fields["patient_name"] = result["patient_name"]
-                persisted_fields["registration_name"] = result["patient_name"]
-            if result.get("patient_dob") is not None:
-                persisted_fields["patient_dob"] = str(result["patient_dob"])
-                persisted_fields["registration_dob"] = str(result["patient_dob"])
-            if result.get("is_new_patient") is not None:
-                persisted_fields["is_new_patient"] = result["is_new_patient"]
-            if "is_verified" in result:
-                persisted_fields["is_verified"] = result["is_verified"]
-            if persisted_fields:
-                await conversation_repo.update_collected_details(
-                    existing_conversation.id,
-                    persisted_fields,
-                )
-            if result.get("patient_id"):
-                try:
-                    await conversation_repo.update_patient(
-                        existing_conversation.id,
-                        uuid.UUID(str(result["patient_id"])),
-                    )
-                except Exception:
-                    pass
-            await session.commit()
-            speech = result.get("latest_agent_speech") or "How can I help you with your appointment today?"
+            result = turn.state
+            speech = turn.speech
             is_completed = result.get("is_completed", False)
             target_slot = result.get("target_slot_details")
 
@@ -563,14 +693,23 @@ async def chat_with_clinic_agent(req: ChatMessageRequest):
             if req.generate_audio:
                 try:
                     import time
-                    from src.api.rest.routes.voice_assistant import _audio_cache
+                    from src.services.audio_storage_service import audio_storage_service
                     generated_audio = await sarvam_service.text_to_speech(speech, target_language_code="en-IN")
                     if generated_audio:
-                        audio_id = uuid.uuid4().hex
-                        _audio_cache[audio_id] = (generated_audio, time.time() + 900)
+                        audio_id = await audio_storage_service.store(generated_audio)
                         audio_url = f"/api/voice-assistant/audio/{audio_id}"
+                    else:
+                        logger.warning("Chat TTS returned no audio: session_id=%s stage=tts", session_id)
+                        await conversation_turn_service.annotate_last_agent_message(
+                            session, existing_conversation.id,
+                            {"audio_delivery": "text_only", "tts_error": "empty_audio"},
+                        )
                 except Exception as e:
                     logger.warning(f"Failed to generate TTS audio for chat response: {e}")
+                    await conversation_turn_service.annotate_last_agent_message(
+                        session, existing_conversation.id,
+                        {"audio_delivery": "text_only", "tts_error": "provider_exception"},
+                    )
 
             return {
                 "reply": speech,
@@ -583,11 +722,10 @@ async def chat_with_clinic_agent(req: ChatMessageRequest):
         except Exception:
             logger.exception("Web chat execution error")
             try:
-                await conversation_repo.append_message(
-                    existing_conversation.id,
-                    role="agent",
+                await conversation_turn_service.save_message(
+                    session, existing_conversation.id, role="agent",
                     content="I apologize, our appointment assistant is currently updating. Please try again or contact the front desk.",
-                    metadata={"event_type": "turn_error"},
+                    metadata={"event_type": "turn_error", "stage": "chat_route"},
                 )
             except Exception:
                 logger.exception("Could not persist the web chat error reply")
@@ -597,4 +735,3 @@ async def chat_with_clinic_agent(req: ChatMessageRequest):
                 "is_completed": False,
                 "audio_url": None,
             }
-

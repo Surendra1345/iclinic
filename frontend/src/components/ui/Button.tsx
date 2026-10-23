@@ -26,15 +26,15 @@ export const Button: React.FC<ButtonProps> = ({
 
   const variants = {
     primary:
-      'bg-gradient-to-r from-teal-500 to-emerald-600 text-white shadow-lg shadow-teal-500/25 hover:from-teal-400 hover:to-emerald-500 hover:shadow-teal-500/40 border border-teal-400/30',
+      'bg-[#0F766E] text-white shadow-sm hover:bg-[#0D9488] active:bg-[#115E59] border border-transparent font-medium',
     secondary:
-      'bg-slate-800 text-slate-100 hover:bg-slate-700/80 border border-slate-700 hover:border-slate-600 shadow-md',
+      'bg-[#F1F5F9] text-[#0F172A] hover:bg-[#E2E8F0] border border-[#E2E8F0] shadow-sm font-medium',
     outline:
-      'bg-transparent border border-slate-700 text-slate-300 hover:bg-slate-800/60 hover:text-white hover:border-teal-500/50',
+      'bg-white border border-[#E2E8F0] text-[#475569] hover:bg-[#F1F5F9] hover:text-[#0F172A] hover:border-[#CBD5E1] shadow-sm font-medium',
     ghost:
-      'bg-transparent text-slate-300 hover:bg-slate-800/50 hover:text-teal-400',
+      'bg-transparent text-[#475569] hover:bg-[#F1F5F9] hover:text-[#0D9488]',
     danger:
-      'bg-rose-500/10 border border-rose-500/30 text-rose-400 hover:bg-rose-500/20 hover:border-rose-500/50',
+      'bg-[#FFE4E6] border border-[#FECDD3] text-[#E11D48] hover:bg-[#FECDD3] font-medium shadow-sm',
   }
 
   const sizes = {

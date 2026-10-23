@@ -1,12 +1,13 @@
 """Persistence helpers for outbound call requests and Twilio call attempts."""
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from src.config.settings import settings
 from src.constants.enums import CallStatus, OutboundCallRequestStatus
 from src.data.models.postgres.outbound_call import OutboundCall
 from src.data.models.postgres.outbound_call_request import OutboundCallRequest
@@ -81,6 +82,7 @@ class OutboundCallRepository:
         conversation_id: uuid.UUID,
         provider_call_id: str,
         phone: str,
+        attempt_number: int = 1,
     ) -> OutboundCall:
         call = OutboundCall(
             id=uuid.uuid4(),
@@ -89,7 +91,7 @@ class OutboundCallRepository:
             provider_call_id=provider_call_id,
             number_called=phone,
             status=CallStatus.DIALING,
-            attempt_number=1,
+            attempt_number=attempt_number,
         )
         self.db.add(call)
         await self.db.flush()
@@ -126,6 +128,7 @@ class OutboundCallRepository:
         event_timestamp: Optional[datetime] = None,
         duration_seconds: Optional[int] = None,
         provider_response: Optional[dict] = None,
+        retry_delay_seconds: Optional[int] = None,
     ) -> Optional[OutboundCall]:
         call = await self.get_by_provider_call_id(call_sid)
         if not call:
@@ -157,6 +160,18 @@ class OutboundCallRepository:
         } or event_type in {"completed", "canceled"}:
             values["ended_at"] = now
 
+        retry_at = None
+        retryable_miss = call_status in {CallStatus.NO_ANSWER, CallStatus.BUSY}
+        request_is_open = call.call_request.expires_at > now
+        if retryable_miss and call.attempt_number < max(1, settings.OUTBOUND_CALL_MAX_ATTEMPTS) and request_is_open:
+            delay = (
+                max(0, retry_delay_seconds)
+                if retry_delay_seconds is not None
+                else max(1, settings.OUTBOUND_CALL_RETRY_DELAY_MINUTES) * 60
+            )
+            retry_at = now + timedelta(seconds=delay)
+        values["next_retry_at"] = retry_at
+
         await self.db.execute(
             update(OutboundCall)
             .where(OutboundCall.id == call.id)
@@ -166,8 +181,8 @@ class OutboundCallRepository:
         request_status = {
             CallStatus.DIALING: OutboundCallRequestStatus.PROCESSING,
             CallStatus.ANSWERED: OutboundCallRequestStatus.STARTED,
-            CallStatus.NO_ANSWER: OutboundCallRequestStatus.COMPLETED,
-            CallStatus.BUSY: OutboundCallRequestStatus.COMPLETED,
+            CallStatus.NO_ANSWER: OutboundCallRequestStatus.PROCESSING if retry_at else OutboundCallRequestStatus.COMPLETED,
+            CallStatus.BUSY: OutboundCallRequestStatus.PROCESSING if retry_at else OutboundCallRequestStatus.COMPLETED,
             CallStatus.FAILED: OutboundCallRequestStatus.FAILED,
         }[call_status]
         if event_type in {"completed", "canceled"}:
@@ -177,6 +192,8 @@ class OutboundCallRepository:
                 else OutboundCallRequestStatus.CANCELLED
             )
         request_values = {"status": request_status}
+        if call_status in {CallStatus.NO_ANSWER, CallStatus.BUSY}:
+            request_values["status_reason"] = event_type
         if request_status == OutboundCallRequestStatus.STARTED:
             request_values["started_at"] = now
         elif request_status == OutboundCallRequestStatus.CANCELLED:
@@ -194,5 +211,6 @@ class OutboundCallRepository:
             .where(OutboundCallRequest.id == call.call_request_id)
             .values(**request_values)
         )
+        call.next_retry_at = retry_at
         await self.db.flush()
         return call

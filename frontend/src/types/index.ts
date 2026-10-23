@@ -22,6 +22,7 @@ export interface DashboardStats {
   total_patients: number
   total_locations: number
   total_providers: number
+  forwarded_count?: number
 }
 
 export interface Doctor {
@@ -100,4 +101,47 @@ export interface VoiceAssistantTurnResponse extends ChatApiResponse {
   language: 'en-IN' | 'ta-IN' | 'te-IN'
   language_confidence: number
   audio_url?: string | null
+}
+
+export interface ForwardedActiveAppointment {
+  appointment_id: string
+  doctor_name: string
+  specialty: string
+  location_name: string
+  location_address?: string
+  start_time: string
+  status: string
+}
+
+export interface ForwardedRequestRecord {
+  id: string
+  call_sid: string
+  channel: 'chat' | 'voice' | 'outbound_call' | string
+  patient_id: string | null
+  patient_name: string
+  patient_phone: string
+  patient_email?: string | null
+  patient_dob?: string | null
+  identity_verified?: boolean
+  callback_contact_unavailable?: boolean
+  awaiting_handoff_contact?: boolean
+  reason: string
+  raw_reason?: string
+  status: 'pending' | 'contacted' | 'resolved'
+  notes?: string | null
+  resolved_at?: string | null
+  forwarded_at: string | null
+  active_appointment?: ForwardedActiveAppointment | null
+  messages: Array<{
+    role: 'patient' | 'agent'
+    content: string
+    at?: string
+  }>
+  total_messages: number
+}
+
+export interface ForwardedRequestsResponse {
+  forwarded_requests: ForwardedRequestRecord[]
+  total: number
+  pending_count: number
 }

@@ -13,7 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.control.agents.state import CallState
 from src.control.agents.tools.booking_tools import check_patient_active_appointment
 from src.control.agents.tools.reschedule_tools import reschedule_appointment
-from src.control.agents.nodes.booking_helpers import _extract_time_window
+from src.control.agents.nodes.booking_helpers import _extract_time_window, _match_doctor
+from src.control.agents.nodes.dialogue_guardrails import (
+    is_explicit_confirmation,
+    is_explicit_rejection,
+    is_reschedule_confirmation,
+)
 from src.control.agents.tools.slot_tools import (
     get_available_slots,
     get_branches_for_specialty,
@@ -34,6 +39,27 @@ from src.observability.metrics import booking_outcomes_total
 logger = logging.getLogger(__name__)
 
 CLINIC_TIMEZONE = ZoneInfo("Asia/Kolkata")
+
+
+def _local_slot_datetime(slot: Dict[str, Any]) -> datetime:
+    value = slot["start_time"]
+    slot_dt = value if isinstance(value, datetime) else datetime.fromisoformat(value)
+    if slot_dt.tzinfo is None:
+        slot_dt = slot_dt.replace(tzinfo=timezone.utc)
+    return slot_dt.astimezone(CLINIC_TIMEZONE)
+
+
+def _slot_time_list(slots: list[Dict[str, Any]]) -> str:
+    """Format a same-day slot list without repeating doctor/branch details."""
+    return ", ".join(_local_slot_datetime(slot).strftime("%I:%M %p").lstrip("0") for slot in slots)
+
+
+def _slot_date_time_list(slots: list[Dict[str, Any]]) -> str:
+    """Format cross-date options compactly; clinician context is stated once."""
+    return "; ".join(
+        _local_slot_datetime(slot).strftime("%A, %B %d at %I:%M %p").replace(" at 0", " at ")
+        for slot in slots
+    )
 
 
 def _extract_time_of_day(text: str) -> Optional[Tuple[int, int]]:
@@ -124,21 +150,92 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
         )
     )
 
-    # 3. Detect Confirmation when a new slot is currently held
-    has_confirm_word = any(
-        w in user_speech
-        for w in [
-            "yes", "confirm", "sure", "move it", "change it", "please", "okay", "fine",
-            "book it", "book that", "book", "go ahead", "reschedule it", "reschedule",
-            "that works", "perfect", "sounds good", "done", "alright", "proceed"
-        ]
+    # Keep the current doctor only when the patient has not asked to change
+    # doctors. A request for another doctor means a different clinician in the
+    # same specialty; never silently offer the current doctor again.
+    asks_another_doctor = any(
+        phrase in user_speech
+        for phrase in (
+            "another doctor", "different doctor", "other doctor", "any other doctor",
+            "change doctor", "switch doctor", "someone else", "different physician",
+        )
     )
-    has_negation = any(
+    if asks_another_doctor:
+        if target_slot_id:
+            await release_slot(target_slot_id, db)
+        requested_branch = next(
+            (
+                loc for loc, aliases in {
+                    "Anna Nagar": ("anna nagar", "annanagar"),
+                    "T. Nagar": ("t nagar", "t. nagar", "tnagar"),
+                    "Velachery": ("velachery",),
+                    "Tambaram": ("tambaram",),
+                }.items() if any(alias in user_speech for alias in aliases)
+            ),
+            current_loc,
+        )
+        slots = await get_slots_by_specialty_and_location(
+            current_spec, requested_branch, db, limit=50
+        ) if current_spec and requested_branch else []
+        alternatives = [slot for slot in slots if slot.get("doctor_name") != current_doc]
+        doctors = list(dict.fromkeys(slot["doctor_name"] for slot in alternatives))
+        if doctors:
+            return {
+                "target_slot_id": None,
+                "target_slot_details": None,
+                "offered_slots": [],
+                "preferred_specialty": current_spec,
+                "preferred_location": requested_branch,
+                "preferred_doctor": None,
+                "awaiting_preferred_date": True,
+                "latest_agent_speech": (
+                    f"For {current_spec}, other doctors with openings at our "
+                    f"{requested_branch} branch are {', '.join(doctors)}. Which doctor would you prefer?"
+                ),
+            }
+        return {
+            "target_slot_id": None,
+            "target_slot_details": None,
+            "offered_slots": [],
+            "preferred_specialty": current_spec,
+            "preferred_location": None,
+            "preferred_doctor": None,
+            "awaiting_preferred_date": True,
+            "latest_agent_speech": (
+                f"I couldn't find another {current_spec or 'specialist'} with an opening at our "
+                f"{requested_branch} branch. Which branch would you like me to check?"
+            ),
+        }
+
+    req_time = _extract_time_of_day(user_speech)
+    req_window = _extract_time_window(user_speech)
+    is_asking_alternative = any(
+        phrase in user_speech
+        for phrase in (
+            "another slot", "alternative slot", "can i have alternative slots",
+            "different slot", "other slot", "another time", "different time",
+            "other time", "different day", "another day", "change time", "change slot",
+            "another timing", "alternative timing", "other slots", "alternative",
+            "alternatives", "any other slot", "any other time",
+        )
+    )
+    is_explicitly_changing_held_slot = bool(
+        requested_start or req_time or req_window or is_asking_alternative
+        or is_asking_alternative_dates
+        or any(phrase in user_speech for phrase in (
+            "change my date", "change date", "new date", "another day", "different day",
+            "another branch", "different branch", "change branch", "switch branch",
+        ))
+    )
+
+    # 3. Detect Confirmation when a new slot is currently held
+    has_confirm_word = is_reschedule_confirmation(raw_speech)
+    has_negation = is_explicit_rejection(raw_speech) or any(
         w in user_speech
-        for w in [
-            "no", "don't", "cancel", "not this", "different", "other", "another",
-            "alternative", "alterantive", "change time", "change slot", "keep"
-        ]
+        for w in (
+            "cancel", "not this", "different", "other", "another",
+            "alternative", "alterantive", "change time", "change slot", "keep",
+        )
     )
 
     if target_slot and target_slot_id:
@@ -160,11 +257,8 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
                     conversation_id_str=convo_id,
                     db=db,
                 )
-                if convo_id:
-                    try:
-                        await repo.update_state(uuid.UUID(str(convo_id)), ConversationState.RESCHEDULED)
-                    except Exception:
-                        pass
+                # The shared turn service persists state after the atomic
+                # reschedule succeeds, without committing mid-turn.
                 booking_outcomes_total.labels("reschedule", "success").inc()
 
                 # Get preparation instructions if available
@@ -204,6 +298,38 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
                     "handoff_reason": f"Reschedule failure: {str(e)}",
                     "latest_agent_speech": "I encountered an issue updating your appointment. Let me transfer you to our front desk.",
                 }
+
+        # A held slot is a pending proposal, not permission to search for a
+        # different slot. Keep it held when the patient's reply is unclear.
+        # Only release it when they explicitly ask to change the proposal.
+        if not is_explicitly_changing_held_slot:
+            if has_negation:
+                await release_slot(target_slot_id, db)
+                return {
+                    "target_slot_id": None,
+                    "target_slot_details": None,
+                    "offered_slots": [],
+                    "awaiting_preferred_date": True,
+                    "latest_agent_speech": "Understood. I won't change your appointment to that slot. What date or time would you prefer instead?",
+                }
+            held_time = _slot_date_time_list([target_slot])
+            doctor = target_slot.get("doctor_name") or current_doc or "your doctor"
+            location = (target_slot.get("location_name") or current_loc or "the selected branch").removesuffix(" Branch")
+            return {
+                "intent": "reschedule",
+                "target_slot_id": target_slot_id,
+                "target_slot_details": target_slot,
+                "latest_agent_speech": (
+                    f"I still have {doctor} at {location} on {held_time} held. "
+                    "Would you like me to move your appointment to that time? Please say yes, or tell me a different date or time."
+                ),
+            }
+
+        # Patient clearly requested another date/time/slot. Release this hold
+        # before searching, so an abandoned reservation cannot linger.
+        await release_slot(target_slot_id, db)
+        target_slot_id = None
+        target_slot = None
 
     # 4. Check if patient asks for an alternative slot / different time / different date
     is_asking_alternative = not is_asking_alternative_dates and (any(
@@ -261,21 +387,13 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
         None,
     )
 
-    requested_doctor = None
-    doctor_match = re.search(
-        r"\b(?:for|with|from)\s+(?:dr\.?\s+)?([a-z]+(?:\s+[a-z]+){1,3})",
-        user_speech,
-    )
-    if doctor_match:
-        requested_doctor = doctor_match.group(1).strip().title()
+    requested_doctor = _match_doctor(raw_speech)
 
     # Determine effective doctor anchor
     # CRITICAL: Always default to CURRENT appointment's doctor unless user explicitly requested another doctor/branch!
     effective_doctor = requested_doctor or state.get("preferred_doctor") or current_doc
 
     # Check if user requested a specific time of day (e.g. "at 2 PM", "11:30 AM")
-    req_time = _extract_time_of_day(user_speech)
-    req_window = _extract_time_window(user_speech)
     is_asking_to_change_date = is_asking_alternative_dates or any(
         phrase in user_speech
         for phrase in ("change my date", "change date", "new date", "another day", "different day")
@@ -336,12 +454,13 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
                     "target_slot_id": chosen["slot_id"],
                     "target_slot_details": chosen,
                     "offered_slots": [],
+                    "awaiting_preferred_date": False,
                     "latest_agent_speech": (
                         f"I can hold {chosen['formatted_speech']}. Would you like me to move your appointment to that time?"
                     ),
                 }
-        if any(word in user_speech for word in ["book it", "book that", "yes", "confirm", "go ahead"]):
-            choices = "; ".join(slot["formatted_speech"] for slot in offered_slots)
+        if is_explicit_confirmation(raw_speech):
+            choices = _slot_date_time_list(offered_slots)
             return {
                 "latest_agent_speech": f"Which of these times would you like: {choices}? Please tell me the time, and I will confirm before changing your appointment.",
             }
@@ -381,7 +500,7 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
             slot for slot in date_slots
             if slot["slot_id"] != active_appt.get("slot_id")
         ]
-        if req_time or req_window:
+        if (req_time or req_window) and date_slots:
             req_hr, req_mn = req_time or (None, None)
             matching = []
             for slot in date_slots:
@@ -397,10 +516,56 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
                 )
                 if matches_time:
                     matching.append(slot)
-            date_slots = matching
+            if matching:
+                date_slots = matching
+            else:
+                day_label = requested_local_date.strftime("%A, %B %d")
+                req_str = (
+                    f"between {req_window[0][0]:02d}:{req_window[0][1]:02d} and {req_window[1][0]:02d}:{req_window[1][1]:02d}"
+                    if req_window
+                    else f"{req_hr:02d}:{req_mn:02d}"
+                )
+                alt_times = [
+                    datetime.fromisoformat(s["start_time"]).astimezone(CLINIC_TIMEZONE).strftime("%I:%M %p").lstrip("0")
+                    for s in date_slots[:4]
+                ]
+                return {
+                    "target_slot_id": None,
+                    "target_slot_details": None,
+                    "offered_slots": date_slots[:4],
+                    "awaiting_preferred_date": True,
+                    "preferred_doctor": effective_doctor,
+                    "preferred_location": requested_location or current_loc,
+                    "preferred_specialty": current_spec,
+                    "latest_agent_speech": (
+                        f"I don't have an opening around {req_str} with {effective_doctor} on {day_label}, "
+                        f"but other available times on that day are {', '.join(alt_times)}. Which would you prefer?"
+                    ),
+                }
 
         if not date_slots:
             day_label = requested_local_date.strftime("%A, %B %d")
+            raw_upcoming = await get_slots_by_doctor(effective_doctor, db, limit=10) if effective_doctor else []
+            upcoming_slots = [
+                s for s in raw_upcoming
+                if s["slot_id"] != active_appt.get("slot_id")
+            ]
+            if upcoming_slots:
+                alt_options = upcoming_slots[:3]
+                choices = _slot_date_time_list(alt_options)
+                return {
+                    "target_slot_id": None,
+                    "target_slot_details": None,
+                    "offered_slots": alt_options,
+                    "awaiting_preferred_date": True,
+                    "preferred_doctor": effective_doctor,
+                    "preferred_location": requested_location or current_loc,
+                    "preferred_specialty": current_spec,
+                    "latest_agent_speech": (
+                        f"I couldn't find an available slot with {effective_doctor} on {day_label}. "
+                        f"The next available openings are: {choices}. Would any of those work for you?"
+                    ),
+                }
             return {
                 "target_slot_id": None,
                 "target_slot_details": None,
@@ -432,7 +597,7 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
             }
 
         options = date_slots[:5]
-        times = "; ".join(slot["formatted_speech"] for slot in options)
+        times = _slot_time_list(options)
         return {
             "target_slot_id": None,
             "target_slot_details": None,
@@ -442,8 +607,10 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
             "preferred_location": requested_location or current_loc,
             "preferred_specialty": current_spec,
             "latest_agent_speech": (
-                f"On {requested_local_date.strftime('%A, %B %d')}, these times are available: {times}. "
-                "Which time would you prefer? I will ask you to confirm before changing the appointment."
+                f"On {requested_local_date.strftime('%A, %B %d')}, {effective_doctor} at "
+                f"{(requested_location or current_loc or 'your selected branch').removesuffix(' Branch')} "
+                f"has these available times: {times}. Which time would you prefer? "
+                "I will ask you to confirm before changing the appointment."
             ),
         }
 
@@ -476,13 +643,14 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
             if len(date_options) == 3:
                 break
         if date_options:
-            dates_text = "; ".join(slot["formatted_speech"] for slot in date_options)
+            dates_text = _slot_date_time_list(date_options)
             return {
                 "target_slot_id": None,
                 "target_slot_details": None,
                 "offered_slots": date_options,
                 "latest_agent_speech": (
-                    f"Here are alternative dates with {effective_doctor}: {dates_text}. "
+                    f"Here are alternative openings with {effective_doctor} at "
+                    f"{(current_loc or 'your selected branch').removesuffix(' Branch')}: {dates_text}. "
                     "Which date would you prefer? I will confirm the exact time before rescheduling."
                 ),
             }
@@ -598,7 +766,7 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
     # 9. Offer the found slot
     if is_asking_alternative:
         alternatives = slots[:3]
-        choices = "; ".join(slot["formatted_speech"] for slot in alternatives)
+        choices = _slot_time_list(alternatives)
         return {
             "target_slot_id": None,
             "target_slot_details": None,
@@ -608,7 +776,8 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
             "preferred_location": current_loc,
             "preferred_specialty": current_spec,
             "latest_agent_speech": (
-                f"Here are alternative times with {effective_doctor}: {choices}. "
+                f"Here are alternative times with {effective_doctor} at "
+                f"{(current_loc or 'your selected branch').removesuffix(' Branch')}: {choices}. "
                 "Which one would you like? I will ask you to confirm before changing your appointment."
             ),
         }

@@ -241,6 +241,28 @@ def parse_date_query_to_range(date_text: str):
     return None, None
 
 
+def has_date_reference(text: str) -> bool:
+    """Detect an attempted date even when the date parser cannot validate it."""
+    import re
+    lower = (text or "").lower()
+    month = r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+    weekday = r"monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+    return bool(
+        re.search(rf"\b(?:{month})\b", lower)
+        or re.search(rf"\b(?:{weekday}|today|tomorrow)\b", lower)
+        or re.search(r"\b\d{4}-\d{1,2}-\d{1,2}\b", lower)
+        or re.search(r"\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b", lower)
+        or re.search(r"\b(?:on|the)\s+\d{1,2}(?:st|nd|rd|th)?\b", lower)
+    )
+
+
+def _clock_to_time(clock: Optional[tuple[int, int]]):
+    if clock is None:
+        return None
+    from datetime import time
+    return time(clock[0], clock[1])
+
+
 async def get_slots_by_date_and_criteria(
     db: AsyncSession,
     *,
@@ -248,6 +270,8 @@ async def get_slots_by_date_and_criteria(
     specialty: Optional[str] = None,
     location_name: Optional[str] = None,
     doctor_name: Optional[str] = None,
+    requested_time: Optional[tuple[int, int]] = None,
+    requested_window: Optional[tuple[tuple[int, int], tuple[int, int]]] = None,
     limit: int = 5,
 ) -> List[Dict[str, Any]]:
     """Return available future slots filtered by parsed date, specialty, location, and doctor."""
@@ -255,6 +279,8 @@ async def get_slots_by_date_and_criteria(
     start_dt, end_dt = None, None
     if date_query:
         start_dt, end_dt = parse_date_query_to_range(date_query)
+        if start_dt is None or end_dt is None:
+            return []
 
     slots = await repo.get_slots_by_criteria(
         start_time_gte=start_dt,
@@ -262,6 +288,8 @@ async def get_slots_by_date_and_criteria(
         specialty=specialty,
         location_name=location_name,
         doctor_name=doctor_name,
+        clinic_time_gte=_clock_to_time(requested_window[0] if requested_window else requested_time),
+        clinic_time_lte=_clock_to_time(requested_window[1] if requested_window else requested_time),
         limit=limit,
     )
     return [_format_slot(s) for s in slots]

@@ -69,6 +69,20 @@ class TwilioService:
                 time.perf_counter() - started
             )
 
+    def get_call_details(self, call_sid: str) -> dict:
+        """Read the terminal status and provider end time for callback recovery."""
+        started = time.perf_counter()
+        try:
+            call = self.client.calls(call_sid).fetch()
+            return {
+                "status": str(call.status or "").lower(),
+                "end_time": call.end_time,
+            }
+        finally:
+            provider_request_duration_seconds.labels("twilio", "get_call_status").observe(
+                time.perf_counter() - started
+            )
+
     def build_stream_twiml(
         self,
         websocket_url: str,

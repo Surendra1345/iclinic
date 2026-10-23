@@ -76,6 +76,30 @@ class ConversationRepository:
             )
             await self.db.commit()
 
+    async def persist_turn_progress(
+        self,
+        conversation_id: uuid.UUID,
+        *,
+        state: Optional[ConversationState],
+        step: dict[str, Any],
+    ) -> None:
+        """Persist per-turn diagnostics and append state history on transitions."""
+        convo = await self.db.get(Conversation, conversation_id)
+        if not convo:
+            return
+        values: dict[str, Any] = {"updated_at": datetime.utcnow()}
+        history = list(convo.state_history or [])
+        if state is not None and convo.current_state != state:
+            values["current_state"] = state
+            history.append({"state": state.value, "at": step["at"]})
+            values["state_history"] = history
+        step_logs = list(convo.step_logs or [])
+        step_logs.append(step)
+        values["step_logs"] = step_logs
+        await self.db.execute(
+            update(Conversation).where(Conversation.id == conversation_id).values(**values)
+        )
+
     async def set_patient(self, conversation_id: uuid.UUID, patient_id: uuid.UUID) -> None:
         await self.db.execute(
             update(Conversation)
@@ -117,6 +141,27 @@ class ConversationRepository:
                 .values(messages=messages)
             )
             await self.db.commit()
+
+    async def update_last_agent_message_metadata(
+        self,
+        conversation_id: uuid.UUID,
+        metadata: dict[str, Any],
+    ) -> None:
+        """Attach delivery-stage metadata to the most recent saved assistant turn."""
+        convo = await self.db.get(Conversation, conversation_id)
+        if not convo:
+            return
+        messages = list(convo.messages or [])
+        for message in reversed(messages):
+            if message.get("role") == "agent":
+                message.update(metadata)
+                await self.db.execute(
+                    update(Conversation)
+                    .where(Conversation.id == conversation_id)
+                    .values(messages=messages)
+                )
+                await self.db.commit()
+                return
 
     async def update_collected_details(
         self,

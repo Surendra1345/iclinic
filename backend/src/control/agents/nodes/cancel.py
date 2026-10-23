@@ -12,6 +12,8 @@ from src.config.settings import settings
 from src.constants.enums import ConversationState
 from src.data.repositories.conversation_repository import ConversationRepository
 from src.observability.metrics import booking_outcomes_total
+from src.control.agents.nodes.dialogue_guardrails import is_explicit_confirmation, is_explicit_rejection
+from src.control.agents.tools.slot_tools import release_slot
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,15 @@ async def cancel_agent_node(state: CallState, db: AsyncSession) -> Dict[str, Any
     patient_id = state.get("patient_id")
     convo_id = state.get("conversation_id")
     repo = ConversationRepository(db)
+
+    # A patient can cancel after considering a held reschedule option. Release
+    # that temporary hold before entering the cancellation confirmation flow.
+    held_slot_id = state.get("target_slot_id")
+    if held_slot_id:
+        try:
+            await release_slot(held_slot_id, db)
+        except Exception:
+            logger.warning("Could not release held slot %s before cancellation", held_slot_id)
 
     # 1. Fetch active appointment
     active_appt = state.get("active_appointment_details")
@@ -52,7 +63,11 @@ async def cancel_agent_node(state: CallState, db: AsyncSession) -> Dict[str, Any
             logger.warning(f"Error parsing start time: {e}")
 
     # 3. Handle confirmation response
-    if any(w in user_speech for w in ["yes", "confirm", "sure", "cancel it", "please", "okay"]):
+    awaiting_cancel_prompt = bool(
+        state.get("awaiting_cancel_confirmation")
+        or "are you sure you want to cancel" in (state.get("latest_agent_speech") or "").lower()
+    )
+    if awaiting_cancel_prompt and is_explicit_confirmation(user_speech):
         try:
             await cancel_appointment(
                 appointment_id_str=active_appt["appointment_id"],
@@ -60,15 +75,15 @@ async def cancel_agent_node(state: CallState, db: AsyncSession) -> Dict[str, Any
                 db=db,
                 reason="Patient requested cancellation via voice call",
             )
-            if convo_id:
-                try:
-                    await repo.update_state(uuid.UUID(str(convo_id)), ConversationState.CANCELLED)
-                except Exception:
-                    pass
+            # The shared turn service records cancellation state after this
+            # atomic action succeeds, without committing mid-turn.
             booking_outcomes_total.labels("cancel", "success").inc()
 
             return {
                 "booking_confirmed": True,
+                "target_slot_id": None,
+                "target_slot_details": None,
+                "awaiting_cancel_confirmation": False,
                 "active_appointment_id": active_appt["appointment_id"],
                 "active_appointment_details": active_appt,
                 "latest_agent_speech": "Your appointment has been cancelled. We have sent a confirmation to your phone. Have a wonderful day!",
@@ -86,13 +101,19 @@ async def cancel_agent_node(state: CallState, db: AsyncSession) -> Dict[str, Any
                 "latest_agent_speech": "I had trouble processing the cancellation. Connecting you to our front desk team now.",
             }
 
-    if any(w in user_speech for w in ["no", "keep", "don't", "keep it"]):
+    if awaiting_cancel_prompt and is_explicit_rejection(user_speech):
         return {
+            "awaiting_cancel_confirmation": False,
+            "target_slot_id": None,
+            "target_slot_details": None,
             "latest_agent_speech": "No problem! I have kept your appointment as scheduled. Is there anything else I can help you with?",
         }
 
     # Initial prompt for confirmation
     return {
+        "awaiting_cancel_confirmation": True,
+        "target_slot_id": None,
+        "target_slot_details": None,
         "active_appointment_details": active_appt,
         "latest_agent_speech": f"Are you sure you want to cancel your appointment for {active_appt['formatted_speech']}?",
     }

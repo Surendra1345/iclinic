@@ -1,9 +1,11 @@
 from contextlib import asynccontextmanager
+import asyncio
+import hmac
 import logging
 import time
 
 # pyrefly: ignore[missing-import]
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 # pyrefly: ignore[missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 # pyrefly: ignore[missing-import]
@@ -25,6 +27,11 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown hooks."""
+    from src.control.agents.graph import (
+        close_persistent_checkpointer,
+        initialize_persistent_checkpointer,
+    )
+    await initialize_persistent_checkpointer(settings.DATABASE_URL)
     # ── Startup ──────────────────────────────────────────────────────────────
     # Import here to avoid circular imports at module load time
     from src.api.rest.routes import voice  # noqa: F401  (registers router)
@@ -36,6 +43,7 @@ async def lifespan(app: FastAPI):
     # pyrefly: ignore[missing-import]
     from src.core.scheduler import stop_scheduler
     await stop_scheduler()
+    await close_persistent_checkpointer()
 
 
 def create_app() -> FastAPI:
@@ -126,5 +134,17 @@ def create_app() -> FastAPI:
     @app.get("/metrics", include_in_schema=False)
     async def metrics():
         return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    @app.get("/internal/diagnostics/intent-classifier", include_in_schema=False)
+    async def intent_classifier_diagnostics(
+        x_diagnostics_key: str = Header(default="", alias="X-Diagnostics-Key"),
+    ):
+        configured_key = settings.DIAGNOSTICS_API_KEY
+        if not configured_key:
+            raise HTTPException(status_code=404, detail="Not found")
+        if not hmac.compare_digest(x_diagnostics_key, configured_key):
+            raise HTTPException(status_code=404, detail="Not found")
+        from src.services.intent_classification_service import intent_classification_service
+        return intent_classification_service.get_latency_stats()
 
     return app

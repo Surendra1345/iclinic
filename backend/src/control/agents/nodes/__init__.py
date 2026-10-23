@@ -9,6 +9,7 @@ from src.control.agents.nodes.cancel import cancel_agent_node
 from src.control.agents.nodes.confirmation import send_confirmation_node
 from src.control.agents.nodes.handoff import handoff_to_front_desk_node
 from src.control.agents.nodes.end_call import end_call_node
+from src.control.agents.nodes.faq import faq_agent_node
 
 __all__ = [
     "start_conversation_node",
@@ -22,4 +23,5 @@ __all__ = [
     "send_confirmation_node",
     "handoff_to_front_desk_node",
     "end_call_node",
+    "faq_agent_node",
 ]

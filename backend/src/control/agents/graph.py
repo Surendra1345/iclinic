@@ -1,5 +1,6 @@
 """LangGraph compiled agent graph."""
 from typing import Any, Callable, Dict
+from sqlalchemy.engine import make_url
 # pyrefly: ignore[missing-import]
 from langchain_core.runnables import RunnableConfig
 # pyrefly: ignore[missing-import]
@@ -19,6 +20,7 @@ from src.control.agents.nodes import (
     cancel_agent_node,
     detect_intent_node,
     end_call_node,
+    faq_agent_node,
     greet_patient_node,
     handoff_to_front_desk_node,
     identity_agent_node,
@@ -47,6 +49,7 @@ def build_graph() -> StateGraph:
     builder.add_node("identity", _wrap_with_db(identity_agent_node))
     builder.add_node("register", _wrap_with_db(register_patient_node))
     builder.add_node("detect_intent", _wrap_with_db(detect_intent_node))
+    builder.add_node("faq", _wrap_with_db(faq_agent_node))
     builder.add_node("booking", _wrap_with_db(booking_agent_node))
     builder.add_node("reschedule", _wrap_with_db(reschedule_agent_node))
     builder.add_node("cancel", _wrap_with_db(cancel_agent_node))
@@ -58,13 +61,14 @@ def build_graph() -> StateGraph:
     # START -> start
     builder.add_edge(START, "start")
 
-    # Start -> [detect_intent (if verified), register (if new), greet (if verifying), handoff]
+    # Start routes explicit handoff and existing-patient corrections before registration.
     builder.add_conditional_edges(
         "start",
         route_after_start,
         {
             "detect_intent": "detect_intent",
             "register": "register",
+            "identity": "identity",
             "greet": "greet",
             "handoff": "handoff",
         },
@@ -96,7 +100,7 @@ def build_graph() -> StateGraph:
         },
     )
 
-    # Intent -> [handoff, booking, reschedule, cancel, register, greet, identity, end_call, END]
+    # Intent -> [handoff, faq, booking, reschedule, cancel, register, greet, identity, end_call, END]
     builder.add_conditional_edges(
         "detect_intent",
         route_after_intent,
@@ -108,10 +112,14 @@ def build_graph() -> StateGraph:
             "register": "register",
             "greet": "greet",
             "identity": "identity",
+            "faq": "faq",
             "end_call": "end_call",
             END: END,
         },
     )
+
+    # FAQ -> END (answer is already in latest_agent_speech)
+    builder.add_edge("faq", END)
 
     # Booking -> [handoff, confirmation, END]
     builder.add_conditional_edges(
@@ -157,6 +165,47 @@ def build_graph() -> StateGraph:
 
 
 # Global checkpointer and compiled graph instance
-checkpointer = MemorySaver()
+checkpointer: Any = MemorySaver()
 agent_graph = build_graph().compile(checkpointer=checkpointer)
+_checkpoint_pool: Any = None
+
+
+def get_agent_graph():
+    """Return the active graph (PostgreSQL-backed after app startup)."""
+    return agent_graph
+
+
+async def initialize_persistent_checkpointer(database_url: str) -> None:
+    """Use PostgreSQL for LangGraph checkpoints so active threads survive restarts."""
+    global agent_graph, checkpointer, _checkpoint_pool
+    if _checkpoint_pool is not None:
+        return
+
+    # LangGraph's Postgres saver uses psycopg; the application ORM uses asyncpg.
+    from psycopg_pool import AsyncConnectionPool
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+    connection_url = make_url(database_url).set(drivername="postgresql").render_as_string(
+        hide_password=False
+    )
+    pool = AsyncConnectionPool(
+        conninfo=connection_url,
+        min_size=1,
+        max_size=10,
+        kwargs={"autocommit": True, "prepare_threshold": 0},
+        open=False,
+    )
+    await pool.open()
+    saver = AsyncPostgresSaver(pool)
+    await saver.setup()
+    checkpointer = saver
+    agent_graph = build_graph().compile(checkpointer=saver)
+    _checkpoint_pool = pool
+
+
+async def close_persistent_checkpointer() -> None:
+    global _checkpoint_pool
+    if _checkpoint_pool is not None:
+        await _checkpoint_pool.close()
+        _checkpoint_pool = None
 

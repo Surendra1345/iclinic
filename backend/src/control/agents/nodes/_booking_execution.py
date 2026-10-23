@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.control.agents.tools.booking_tools import book_appointment
 from src.control.agents.tools.slot_tools import release_slot
-from src.constants.enums import ConversationState, PatientSource
+from src.constants.enums import PatientSource
 from src.data.repositories.conversation_repository import ConversationRepository
 from src.data.repositories.patient_repository import PatientRepository
 from src.observability.metrics import booking_outcomes_total
@@ -24,6 +24,7 @@ async def _execute_booking(
     patient_name: Optional[str],
     patient_email: Optional[str],
     convo_id: Optional[str],
+    appointment_type_name: Optional[str],
     repo: ConversationRepository,
     db: AsyncSession,
 ) -> Dict[str, Any]:
@@ -59,17 +60,17 @@ async def _execute_booking(
             slot_id_str=target_slot_id,
             conversation_id_str=convo_id,
             db=db,
+            appointment_type_name=appointment_type_name,
         )
-        if convo_id:
-            try:
-                await repo.update_state(uuid.UUID(str(convo_id)), ConversationState.BOOKED)
-            except Exception:
-                pass
+        # Conversation state is persisted by the shared turn service after
+        # this action succeeds. Avoid a mid-turn commit so cancellation rolls
+        # back the appointment and slot together.
         booking_outcomes_total.labels("book", "success").inc()
 
         time_str = _format_slot_time_str(target_slot["start_time"])
+        appointment_label = appointment_type_name or "General Consultation"
         speech = (
-            f"Your appointment with {target_slot.get('doctor_name')} at our "
+            f"Your {appointment_label} appointment with {target_slot.get('doctor_name')} at our "
             f"{_clean_loc(target_slot.get('location_name'))} branch on {time_str} "
             f"has been booked!"
         )

@@ -9,8 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.control.agents.state import CallState
 from src.control.agents.tools.identity_tools import lookup_by_phone, verify_patient_by_name_and_dob
-from src.control.agents.tools.registration_tools import is_greeting, validate_dob
+from src.control.agents.tools.registration_tools import (
+    is_closing_or_thanks,
+    is_greeting,
+    is_name_only_candidate,
+    validate_dob,
+)
 from src.control.agents.tools.booking_tools import check_patient_active_appointment
+from src.control.agents.tools.followup_tools import (
+    followup_candidate_prompt,
+    get_followup_candidates,
+)
 from src.config.settings import settings
 from src.constants.enums import ConversationState
 from src.data.repositories.conversation_repository import ConversationRepository
@@ -18,7 +27,17 @@ from src.data.repositories.conversation_repository import ConversationRepository
 
 def _extract_name_and_dob_from_speech(text: str) -> tuple[Optional[str], Optional[date]]:
     """Extract name and date of birth if user speaks both together."""
-    is_valid, parsed_dob, _ = validate_dob(text)
+    # Validate the date fragment itself instead of requiring the whole spoken
+    # sentence to be a date. This handles natural speech such as "Kiran, my
+    # date of birth is 31st July 2004" consistently across STT providers.
+    date_fragment = re.search(
+        r"\b(?:\d{1,2}[-/.]\d{1,2}[-/.]\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+"
+        r"(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+(?:\d\s*){3}\d)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    date_text = date_fragment.group(0) if date_fragment else text
+    is_valid, parsed_dob, _ = validate_dob(date_text)
     if not is_valid or not parsed_dob:
         return None, None
 
@@ -31,12 +50,15 @@ def _extract_name_and_dob_from_speech(text: str) -> tuple[Optional[str], Optiona
         flags=re.IGNORECASE,
     )
     cleaned = re.sub(
-        r"^(?:my name is|i am|name is|this is|i'm|call me|my dob is|dob is|born on|date of birth is|date of birth)\s+",
+        r"^(?:hello[\s,!.]*)?(?:my name is|i am|name is|this is|i'm|call me|my dob is|dob is|born on|date of birth is|date of birth)\s+",
         "",
         cleaned,
         flags=re.IGNORECASE,
     ).strip()
-    cleaned = re.sub(r"[,;:\(\)]", " ", cleaned).strip()
+    # STT commonly places a sentence stop after the name ("Kiran. My date of
+    # birth..."). Treat that punctuation as a separator before accepting name
+    # words, otherwise "Kiran." is rejected by ``isalpha`` below.
+    cleaned = re.sub(r"[,;:\(\).]", " ", cleaned).strip()
 
     stop_words = {"my", "name", "is", "and", "dob", "date", "of", "birth", "born", "on", "year", "yes", "i", "am"}
     words = [w for w in cleaned.split() if w.lower() not in stop_words and w.isalpha()]
@@ -59,33 +81,73 @@ async def identity_agent_node(state: CallState, db: AsyncSession) -> Dict[str, A
     phone = state.get("patient_phone", "")
     channel = state.get("channel", "chat")
     is_phone_call = channel in ("outbound_call", "voice", "inbound_call")
-    attempts = state.get("verify_attempts", 0)
+    attempts = int(state.get("verify_attempts") or 0)
     convo_id = state.get("conversation_id")
     repo = ConversationRepository(db)
 
-    # 1. Check if user speech directly indicates they are a new patient
+    lower_speech = user_speech.lower()
+    # Short acknowledgements are not identity data. This guard is especially
+    # important for the chat endpoint, which can route bare text directly here.
+    if is_closing_or_thanks(user_speech) or is_greeting(user_speech):
+        existing_name = state.get("patient_name")
+        if existing_name and existing_name not in ("Clinic Guest", "Valued Patient"):
+            prompt = f"You're welcome, {existing_name.split()[0]}. Please provide your date of birth to verify your identity."
+        else:
+            prompt = "You're welcome. Please provide your full name and date of birth to verify your identity."
+        return {
+            "is_verified": False,
+            "awaiting_identity_verification": True,
+            "latest_agent_speech": prompt,
+        }
+
+    # Let a patient choose registration at any point during verification.
     if user_speech and any(
-        w in user_speech.lower()
-        for w in ["new patient", "register", "not registered", "first time", "i am new", "i'm new", "sign up"]
+        phrase in lower_speech
+        for phrase in ("new patient", "register", "not registered", "first time", "i am new", "i'm new", "sign up")
     ):
         return {
             "is_new_patient": True,
+            "is_verified": False,
+            "verify_attempts": 0,
+            "patient_name": None,
+            "patient_dob": None,
+            "patient_email": None,
+            "patient_phone": None,
             "awaiting_identity_verification": False,
             "latest_agent_speech": "Welcome to City Care Clinic! Could you please tell me your full name to start registration?",
         }
 
+    # Do not keep collecting registration data when the patient says they
+    # already have a record. Clear the failed values so the corrected pair is
+    # independently provided and checked.
+    if user_speech and any(
+        phrase in lower_speech
+        for phrase in ("old patient", "existing patient", "already a patient", "already registered", "i am a patient", "i'm a patient")
+    ):
+        return {
+            "is_new_patient": False,
+            "is_verified": False,
+            "patient_name": None,
+            "patient_dob": None,
+            "awaiting_identity_verification": True,
+            "latest_agent_speech": "Understood. Please provide your full name and date of birth again so I can verify your existing patient record.",
+        }
+
     # 2. Check if user provided Name and DOB in their speech
     extracted_name, extracted_dob = _extract_name_and_dob_from_speech(user_speech)
-    if not extracted_name and state.get("patient_name") and state.get("patient_name") not in ("Clinic Guest", "Valued Patient"):
+    if (
+        not extracted_name
+        and state.get("patient_name")
+        and state.get("patient_name") not in ("Clinic Guest", "Valued Patient")
+        and is_name_only_candidate(str(state.get("patient_name")))
+    ):
         is_valid_dob, parsed_dob, _ = validate_dob(user_speech)
         if is_valid_dob and parsed_dob:
             extracted_name = state.get("patient_name")
             extracted_dob = parsed_dob
 
     # Preserve a name supplied on its own and ask for DOB on the next turn.
-    if not extracted_dob and user_speech and re.fullmatch(
-        r"[A-Za-z][A-Za-z'???-]*(?:\s+[A-Za-z][A-Za-z'???-]*){0,3}[.!?]?", user_speech
-    ):
+    if not extracted_dob and is_name_only_candidate(user_speech):
         name = user_speech.rstrip(".!?").strip().title()
         return {
             "patient_name": name,
@@ -142,7 +204,48 @@ async def identity_agent_node(state: CallState, db: AsyncSession) -> Dict[str, A
                     )
             else:
                 if pending == "book":
-                    if pref_date and pref_loc:
+                    if state.get("preferred_appointment_type") == "Follow-up Consultation":
+                        candidates = await get_followup_candidates(matched_patient["id"], db)
+                        if not candidates:
+                            followup = (
+                                "I couldn't find a previous completed appointment to link this follow-up to. "
+                                "Would you like to book a regular General Consultation instead?"
+                            )
+                            return {
+                                "patient_id": matched_patient["id"],
+                                "patient_name": matched_patient["full_name"],
+                                "patient_dob": matched_patient["date_of_birth"],
+                                "patient_phone": matched_patient.get("phone") or phone,
+                                "patient_email": matched_patient.get("email"),
+                                "is_verified": True,
+                                "verify_attempts": 0,
+                                "awaiting_identity_verification": False,
+                                "intent": "book",
+                                "pending_intent": "book",
+                                "preferred_appointment_type": None,
+                                "awaiting_followup_decision": True,
+                                "awaiting_followup_visit": False,
+                                "followup_candidates": [],
+                                "latest_agent_speech": f"Thank you, {first_name}! Your identity is verified. {followup}",
+                            }
+
+                        followup = followup_candidate_prompt(candidates)
+                        followup_state = {
+                            "preferred_appointment_type": "Follow-up Consultation",
+                            "followup_candidates": candidates,
+                            "awaiting_followup_visit": len(candidates) > 1,
+                            "awaiting_followup_decision": False,
+                        }
+                        if len(candidates) == 1:
+                            visit = candidates[0]
+                            followup_state.update({
+                                "preferred_doctor": visit["doctor_name"],
+                                "preferred_specialty": visit["specialty"],
+                                "preferred_location": visit["location_name"],
+                                "preferred_date": None,
+                                "awaiting_preferred_date": True,
+                            })
+                    elif pref_date and pref_loc:
                         followup = f"Which doctor would you prefer at our {pref_loc} branch for {pref_date}?"
                     elif pref_date:
                         followup = f"Which clinic branch or doctor would you prefer for {pref_date}?"
@@ -160,13 +263,14 @@ async def identity_agent_node(state: CallState, db: AsyncSession) -> Dict[str, A
                     followup = "How can I assist you with your appointment today?"
 
             active_intent = "reschedule" if active_appt_id else (pending or "book")
-            return {
+            result = {
                 "patient_id": matched_patient["id"],
                 "patient_name": matched_patient["full_name"],
                 "patient_dob": matched_patient["date_of_birth"],
                 "patient_phone": matched_patient.get("phone") or phone,
                 "patient_email": matched_patient.get("email"),
                 "is_verified": True,
+                "verify_attempts": 0,
                 "awaiting_identity_verification": False,
                 "active_appointment_id": active_appt_id,
                 "active_appointment_details": active_appt_details,
@@ -174,17 +278,34 @@ async def identity_agent_node(state: CallState, db: AsyncSession) -> Dict[str, A
                 "pending_intent": active_intent,
                 "latest_agent_speech": f"Thank you, {first_name}! Your identity has been verified. {followup}",
             }
+            if not existing_appt and pending == "book" and state.get("preferred_appointment_type") == "Follow-up Consultation":
+                result.update(followup_state)
+            return result
         else:
-            # Not in DB -> Transition smoothly to New Patient Registration
-            dob_label = extracted_dob.strftime("%B %d, %Y")
+            # A first failed credential pair prompts for a correction. A
+            # second failed pair escalates instead of creating a duplicate
+            # patient record. This node is shared by every conversation channel.
+            next_attempt = attempts + 1
+            if attempts >= 1:
+                return {
+                    "is_new_patient": False,
+                    "is_verified": False,
+                    "awaiting_identity_verification": True,
+                    "verify_attempts": next_attempt,
+                    "handoff_required": True,
+                    "handoff_reason": "Patient identity could not be verified after two attempts",
+                    "latest_agent_speech": "I still couldn't verify those details after two attempts. I'll connect you with our front desk team to help verify your patient record.",
+                }
             return {
                 "patient_name": extracted_name,
                 "patient_dob": extracted_dob.isoformat(),
-                "is_new_patient": True,
-                "awaiting_identity_verification": False,
+                "is_new_patient": False,
+                "is_verified": False,
+                "awaiting_identity_verification": True,
+                "verify_attempts": next_attempt,
                 "latest_agent_speech": (
-                    f"I don't see an existing patient record under {extracted_name} born on {dob_label}. "
-                    "Let's get you registered as a new patient! Could you please provide your email address so we can send your appointment confirmations?"
+                    "I couldn't match that name and date of birth to a patient record. Please check the details and try again. "
+                    "If you are a new patient, tell me and I'll help you register."
                 ),
             }
 
@@ -212,49 +333,23 @@ async def identity_agent_node(state: CallState, db: AsyncSession) -> Dict[str, A
             difflib.SequenceMatcher(None, w, p).ratio() >= 0.60
             for w in words for p in name_parts
         )
-        is_valid_d, spoken_dob, _ = validate_dob(user_speech)
-        dob_matched = bool(is_valid_d and spoken_dob and str(spoken_dob) == str(patient_data["date_of_birth"]))
-
-        if not (name_matched and dob_matched):
-            # Acoustic/component check against patient_data["date_of_birth"]
-            expected_dob_str = str(patient_data["date_of_birth"])
-            exp_parts = expected_dob_str.split("-")
-            if len(exp_parts) == 3:
-                exp_yr, exp_mo, exp_dy = exp_parts[0], int(exp_parts[1]), int(exp_parts[2])
-                mo_names = {
-                    1: ["january", "jan"], 2: ["february", "feb"], 3: ["march", "mar"],
-                    4: ["april", "apr"], 5: ["may"], 6: ["june", "jun"],
-                    7: ["july", "jul"], 8: ["august", "aug"], 9: ["september", "sep", "sept"],
-                    10: ["october", "oct"], 11: ["november", "nov"], 12: ["december", "dec"],
-                }.get(exp_mo, [])
-
-                has_day = (
-                    f"{exp_dy}" in user_text
-                    or f"{exp_dy}th" in user_text
-                    or (exp_dy == 14 and ("143" in user_text or "fourteen" in user_text))
-                )
-                has_mo = any(m in user_text for m in mo_names) or f"{exp_mo:02d}" in user_text
-                has_yr = (
-                    exp_yr in user_text
-                    or exp_yr[-2:] in user_text
-                    or "2, 0 3" in user_text
-                    or "2 0 0 3" in user_text
-                    or "2 0 3" in user_text
-                    or "2013" in user_text
-                    or "two thousand" in user_text
-                )
-                if (has_day and has_mo) or (has_mo and has_yr):
-                    dob_matched = True
-
-            if not (name_matched and dob_matched):
-                fuzzy_v, _ = await verify_patient_by_name_and_dob(
-                    full_name=patient_data["full_name"],
-                    dob_str=user_speech,
-                    db=db,
-                )
-                if fuzzy_v:
-                    name_matched = True
-                    dob_matched = True
+        # Phone lookup is only a candidate lookup, never proof of identity.
+        # Require the spoken name and a complete, parsed DOB to match exactly.
+        spoken_name, spoken_dob = _extract_name_and_dob_from_speech(user_speech)
+        is_valid_d, parsed_spoken_dob, _ = validate_dob(user_speech)
+        if spoken_dob is None and is_valid_d:
+            spoken_dob = parsed_spoken_dob
+        if spoken_name:
+            spoken_words = [part.lower() for part in spoken_name.split()]
+            name_matched = bool(spoken_words) and all(
+                any(difflib.SequenceMatcher(None, part, expected).ratio() >= 0.80 for expected in name_parts)
+                for part in spoken_words
+            )
+        dob_matched = bool(
+            spoken_dob
+            and patient_data.get("date_of_birth")
+            and spoken_dob.isoformat() == str(patient_data["date_of_birth"])
+        )
 
         if name_matched and dob_matched:
             first_name = patient_data["full_name"].split()[0]
@@ -301,21 +396,35 @@ async def identity_agent_node(state: CallState, db: AsyncSession) -> Dict[str, A
                 "patient_dob": patient_data["date_of_birth"],
                 "patient_email": patient_data.get("email"),
                 "is_verified": True,
+                "verify_attempts": 0,
                 "awaiting_identity_verification": False,
                 "active_appointment_id": active_appt_id,
                 "active_appointment_details": active_appt_details,
                 "latest_agent_speech": speech,
             }
 
-        # Explain the failed check and make the next attempt actionable. Do not
-        # expose the DOB stored on the patient record or relax the verification.
+        # Explain the failed check, allow one retry, then escalate. Never
+        # expose the DOB stored on the patient record or relax verification.
+        next_attempt = attempts + 1
+        if attempts >= 1:
+            return {
+                "patient_id": patient_data["id"],
+                "patient_name": patient_data["full_name"],
+                "patient_email": patient_data.get("email"),
+                "is_verified": False,
+                "awaiting_identity_verification": True,
+                "verify_attempts": next_attempt,
+                "handoff_required": True,
+                "handoff_reason": "Patient identity could not be verified after two attempts",
+                "latest_agent_speech": "I still couldn't verify those details after two attempts. I'll connect you with our front desk team to help verify your patient record.",
+            }
         return {
             "patient_id": patient_data["id"],
             "patient_name": patient_data["full_name"],
             "patient_email": patient_data.get("email"),
             "is_verified": False,
             "awaiting_identity_verification": True,
-            "verify_attempts": attempts + 1,
+            "verify_attempts": next_attempt,
             "latest_agent_speech": (
                 "I couldn't verify those details from what I heard. Please say your full name, "
                 "then your date of birth slowly, for example: ???14 December 2003.???"
@@ -344,7 +453,6 @@ async def identity_agent_node(state: CallState, db: AsyncSession) -> Dict[str, A
     return {
         "is_verified": False,
         "awaiting_identity_verification": True,
-        "verify_attempts": attempts + 1,
         "pending_intent": state.get("intent") or "book",
         "pending_speech": user_speech,
         "preferred_date": pref_date_val,

@@ -9,6 +9,7 @@ from src.control.agents.state import CallState
 from src.control.agents.tools.registration_tools import (
     extract_email,
     extract_phone,
+    is_closing_or_thanks,
     is_greeting,
     register_new_patient,
     validate_dob,
@@ -51,6 +52,28 @@ async def register_patient_node(state: CallState, db: AsyncSession) -> Dict[str,
     from src.control.agents.tools.registration_tools import is_invalid_name
     if name and is_invalid_name(name):
         name = None
+
+    # Acknowledgements must not be stored as the patient's name during signup.
+    if is_closing_or_thanks(user_speech):
+        if not name:
+            prompt = "You're welcome. Could you please tell me your full name to continue registration?"
+        elif not dob_str:
+            prompt = f"You're welcome, {name}. Please provide your date of birth (Day-Month-Year)."
+        elif not email:
+            prompt = f"You're welcome, {name}. Please provide your email address for appointment confirmations."
+        elif not phone and not is_phone_call:
+            prompt = "You're welcome. Please provide your 10-digit mobile number to finish registration."
+        else:
+            prompt = None
+        if prompt:
+            return {
+                "is_new_patient": True,
+                "patient_name": name,
+                "patient_dob": dob_str,
+                "patient_email": email,
+                "patient_phone": phone,
+                "latest_agent_speech": prompt,
+            }
 
     # 1. Opportunistic extraction: Extract any newly provided details from user_speech
     parsed_email = extract_email(user_speech)

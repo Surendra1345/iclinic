@@ -60,6 +60,27 @@ class AppointmentRepository:
         )
         return list(result.all())
 
+    async def get_recent_completed_for_patient(
+        self, patient_id: uuid.UUID, *, limit: int = 5
+    ) -> list[Appointment]:
+        """Get completed visits with provider, branch, and appointment type for follow-up selection."""
+        result = await self.db.scalars(
+            select(Appointment)
+            .options(
+                selectinload(Appointment.slot)
+                .selectinload(Slot.provider)
+                .selectinload(Provider.location),
+                selectinload(Appointment.appointment_type),
+            )
+            .where(
+                Appointment.patient_id == patient_id,
+                Appointment.status == AppointmentStatus.COMPLETED,
+            )
+            .order_by(Appointment.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.all())
+
     async def get_by_id(self, appointment_id: uuid.UUID) -> Optional[Appointment]:
         result = await self.db.scalars(
             select(Appointment)

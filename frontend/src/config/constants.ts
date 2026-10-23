@@ -1,9 +1,9 @@
 export const CLINIC_BRANCHES = [
-  { id: 'all', name: 'All Branches' },
-  { id: 'anna-nagar', name: 'Anna Nagar' },
-  { id: 't-nagar', name: 'T. Nagar' },
-  { id: 'velachery', name: 'Velachery' },
-  { id: 'tambaram', name: 'Tambaram' },
+  { id: 'all', name: 'All Branches', label: 'All Branches' },
+  { id: 'Anna Nagar', name: 'Anna Nagar', label: 'Anna Nagar Branch' },
+  { id: 'T. Nagar', name: 'T. Nagar', label: 'T. Nagar Branch' },
+  { id: 'Velachery', name: 'Velachery', label: 'Velachery Branch' },
+  { id: 'Tambaram', name: 'Tambaram', label: 'Tambaram Branch' },
 ] as const
 
 export const APPOINTMENT_STATUS_FILTERS = [
@@ -11,6 +11,7 @@ export const APPOINTMENT_STATUS_FILTERS = [
   { id: 'booked', label: 'Booked' },
   { id: 'rescheduled', label: 'Rescheduled' },
   { id: 'cancelled', label: 'Cancelled' },
+  { id: 'completed', label: 'Completed' },
 ] as const
 
 export const PATIENT_PROMPT_PRESETS = [

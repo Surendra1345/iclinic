@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   Search,
   RefreshCw,
@@ -19,10 +20,25 @@ import { formatDateTime, formatPhone } from '../../../lib/utils'
 
 export const PatientsTable: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('')
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false)
+  const queryClient = useQueryClient()
 
-  const { data, isLoading, isFetching, refetch } = usePatients(
+  const { data, isLoading, refetch } = usePatients(
     searchQuery.trim() || undefined
   )
+
+  const handleRefresh = async () => {
+    setIsManualRefreshing(true)
+    try {
+      await Promise.all([
+        refetch(),
+        queryClient.invalidateQueries({ queryKey: ['dashboard', 'patients'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard', 'stats'] }),
+      ])
+    } finally {
+      setTimeout(() => setIsManualRefreshing(false), 500)
+    }
+  }
 
   const patients = data?.patients || []
 
@@ -36,7 +52,7 @@ export const PatientsTable: React.FC = () => {
               placeholder="Search by patient name, phone, or email..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              leftIcon={<Search className="w-4 h-4" />}
+              leftIcon={<Search className="w-4 h-4 text-[#64748B]" />}
               className="h-10 text-xs"
             />
           </div>
@@ -47,53 +63,52 @@ export const PatientsTable: React.FC = () => {
               variant="outline"
               size="md"
               className="w-full sm:w-auto h-10 text-xs justify-center"
-              onClick={() => refetch()}
-              isLoading={isFetching}
+              onClick={handleRefresh}
+              disabled={isManualRefreshing}
               leftIcon={
                 <RefreshCw
-                  className={`w-3.5 h-3.5 ${isFetching ? 'animate-spin' : ''}`}
+                  className={`w-3.5 h-3.5 ${isManualRefreshing ? 'animate-spin' : ''}`}
                 />
               }
             >
-              Refresh Patients
+              {isManualRefreshing ? 'Refreshing...' : 'Refresh Patients'}
             </Button>
           </div>
         </div>
       </Card>
 
       {/* Main Table Container */}
-      <Card glow="none" className="p-0 overflow-hidden border-slate-800">
+      <Card glow="none" className="p-0 overflow-hidden border-[#E2E8F0]">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm border-collapse">
             <thead>
-              <tr className="border-b border-slate-800 bg-slate-900/80 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+              <tr className="border-b border-[#E2E8F0] bg-[#F1F5F9] text-[11px] font-semibold uppercase tracking-wider text-[#475569]">
                 <th className="py-3.5 px-4">Patient Name</th>
                 <th className="py-3.5 px-4">Contact Info</th>
                 <th className="py-3.5 px-4">Date of Birth</th>
                 <th className="py-3.5 px-4">Active Appointment</th>
-                <th className="py-3.5 px-4 text-center">Visits</th>
                 <th className="py-3.5 px-4">Registered At</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/60 font-sans">
+            <tbody className="divide-y divide-[#E2E8F0] font-sans">
               {isLoading ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-slate-400">
-                    <RefreshCw className="w-6 h-6 animate-spin mx-auto text-teal-400 mb-2" />
+                  <td colSpan={5} className="py-12 text-center text-[#64748B]">
+                    <RefreshCw className="w-6 h-6 animate-spin mx-auto text-[#14B8A6] mb-2" />
                     <span>Loading registered patients...</span>
                   </td>
                 </tr>
               ) : patients.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={6}
-                    className="py-14 text-center text-slate-400 space-y-2"
+                    colSpan={5}
+                    className="py-14 text-center text-[#64748B] space-y-2"
                   >
-                    <Inbox className="w-8 h-8 mx-auto text-slate-600 mb-1" />
-                    <p className="text-sm font-medium text-slate-300">
+                    <Inbox className="w-8 h-8 mx-auto text-[#94A3B8] mb-1" />
+                    <p className="text-sm font-semibold text-[#0F172A]">
                       No registered patients found
                     </p>
-                    <p className="text-xs text-slate-500">
+                    <p className="text-xs text-[#64748B]">
                       New patients will automatically appear here once registered.
                     </p>
                   </td>
@@ -104,19 +119,19 @@ export const PatientsTable: React.FC = () => {
                   return (
                     <tr
                       key={patient.id}
-                      className="hover:bg-slate-800/40 transition-colors duration-150 text-slate-200"
+                      className="hover:bg-[#F8FAFC] transition-colors duration-150 text-[#0F172A]"
                     >
                       {/* Name */}
                       <td className="py-3.5 px-4">
                         <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-full bg-teal-500/10 border border-teal-500/20 text-teal-400 flex items-center justify-center font-bold text-xs shrink-0">
+                          <div className="w-8 h-8 rounded-full bg-[#CCFBF1] border border-[#99F6E4] text-[#0D9488] flex items-center justify-center font-bold text-xs shrink-0">
                             {patient.full_name.charAt(0).toUpperCase()}
                           </div>
                           <div>
-                            <p className="font-semibold text-white text-xs sm:text-sm">
+                            <p className="font-semibold text-[#0F172A] text-xs sm:text-sm">
                               {patient.full_name}
                             </p>
-                            <span className="text-[10px] text-slate-500 font-mono">
+                            <span className="text-[10px] text-[#64748B] font-mono">
                               ID: {patient.id.slice(0, 8)}
                             </span>
                           </div>
@@ -126,13 +141,13 @@ export const PatientsTable: React.FC = () => {
                       {/* Contact */}
                       <td className="py-3.5 px-4">
                         <div className="space-y-0.5 text-xs">
-                          <p className="text-slate-300 flex items-center gap-1.5 font-mono">
-                            <Phone className="w-3 h-3 text-slate-500 shrink-0" />
+                          <p className="text-[#0F172A] flex items-center gap-1.5 font-mono">
+                            <Phone className="w-3 h-3 text-[#64748B] shrink-0" />
                             {patient.phone ? formatPhone(patient.phone) : '—'}
                           </p>
                           {patient.email ? (
-                            <p className="text-[11px] text-slate-400 flex items-center gap-1.5">
-                              <Mail className="w-3 h-3 text-slate-500 shrink-0" />
+                            <p className="text-[11px] text-[#475569] flex items-center gap-1.5">
+                              <Mail className="w-3 h-3 text-[#64748B] shrink-0" />
                               <span className="truncate max-w-[180px]">
                                 {patient.email}
                               </span>
@@ -142,53 +157,46 @@ export const PatientsTable: React.FC = () => {
                       </td>
 
                       {/* DOB */}
-                      <td className="py-3.5 px-4 text-xs text-slate-300">
+                      <td className="py-3.5 px-4 text-xs text-[#0F172A]">
                         {patient.date_of_birth ? (
                           <div className="flex items-center gap-1.5">
-                            <Calendar className="w-3.5 h-3.5 text-teal-400/80" />
+                            <Calendar className="w-3.5 h-3.5 text-[#0D9488]" />
                             <span>{patient.date_of_birth}</span>
                           </div>
                         ) : (
-                          <span className="text-slate-500">—</span>
+                          <span className="text-[#64748B]">—</span>
                         )}
                       </td>
 
                       {/* Active Appointment Status */}
                       <td className="py-3.5 px-4">
                         {active ? (
-                          <div className="p-2 rounded-lg bg-slate-900/90 border border-slate-800 space-y-1 text-xs max-w-xs">
+                          <div className="p-2 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] space-y-1 text-xs max-w-xs">
                             <div className="flex items-center justify-between gap-2">
-                              <span className="font-medium text-white flex items-center gap-1 truncate">
-                                <Stethoscope className="w-3 h-3 text-teal-400 shrink-0" />
+                              <span className="font-medium text-[#0F172A] flex items-center gap-1 truncate">
+                                <Stethoscope className="w-3.5 h-3.5 text-[#0D9488] shrink-0" />
                                 {active.doctor_name}
                               </span>
                               <StatusBadge status={active.status} />
                             </div>
-                            <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
-                              <MapPin className="w-3 h-3 text-slate-500 shrink-0" />
+                            <div className="flex items-center gap-1.5 text-[11px] text-[#475569]">
+                              <MapPin className="w-3.5 h-3.5 text-[#64748B] shrink-0" />
                               <span className="truncate">{active.location_name}</span>
                             </div>
-                            <div className="flex items-center gap-1.5 text-[11px] text-teal-400/90 font-mono">
-                              <Clock className="w-3 h-3 shrink-0" />
+                            <div className="flex items-center gap-1.5 text-[11px] text-[#0D9488] font-mono">
+                              <Clock className="w-3.5 h-3.5 shrink-0" />
                               <span>{formatDateTime(active.start_time)}</span>
                             </div>
                           </div>
                         ) : (
-                          <span className="text-xs text-slate-500 italic">
+                          <span className="text-xs text-[#64748B] italic">
                             No active booking
                           </span>
                         )}
                       </td>
 
-                      {/* Total Visits */}
-                      <td className="py-3.5 px-4 text-center">
-                        <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-300 border border-slate-700">
-                          {patient.total_appointments}
-                        </span>
-                      </td>
-
                       {/* Registered Date */}
-                      <td className="py-3.5 px-4 text-xs text-slate-400">
+                      <td className="py-3.5 px-4 text-xs text-[#64748B]">
                         {patient.created_at
                           ? formatDateTime(patient.created_at)
                           : '—'}
@@ -202,9 +210,9 @@ export const PatientsTable: React.FC = () => {
         </div>
 
         {/* Footer info bar */}
-        <div className="py-3 px-4 bg-slate-900/60 border-t border-slate-800 text-xs text-slate-400 flex items-center justify-between">
+        <div className="py-3 px-4 bg-[#F1F5F9] border-t border-[#E2E8F0] text-xs text-[#475569] flex items-center justify-between">
           <span>Showing {patients.length} registered patient profiles</span>
-          <span className="text-[11px] text-teal-400/80">
+          <span className="text-[11px] text-[#0D9488] font-medium">
             Auto-refresh active (5s interval)
           </span>
         </div>

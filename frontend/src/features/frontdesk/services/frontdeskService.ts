@@ -3,6 +3,7 @@ import type {
   AppointmentRecord,
   ClinicLocation,
   DashboardStats,
+  ForwardedRequestsResponse,
 } from '../../../types'
 
 export interface AppointmentListResponse {
@@ -81,4 +82,33 @@ export const frontdeskService = {
     )
     return response.data
   },
+
+  /**
+   * Fetches patients whose conversations were forwarded to the front desk.
+   */
+  async getForwardedRequests(params?: {
+    status?: string
+    search?: string
+  }): Promise<ForwardedRequestsResponse> {
+    const response = await apiClient.get<ForwardedRequestsResponse>(
+      '/api/dashboard/forwarded-requests',
+      { params }
+    )
+    return response.data
+  },
+
+  /**
+   * Updates escalation status ('pending' | 'contacted' | 'resolved') and optional staff notes.
+   */
+  async updateForwardedRequest(
+    id: string,
+    data: { status: 'pending' | 'contacted' | 'resolved'; notes?: string }
+  ): Promise<{ status: string }> {
+    const response = await apiClient.patch<{ status: string }>(
+      `/api/dashboard/forwarded-requests/${id}`,
+      data
+    )
+    return response.data
+  },
 }
+

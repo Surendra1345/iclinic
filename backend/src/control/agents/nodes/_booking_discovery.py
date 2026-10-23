@@ -6,16 +6,195 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.control.agents.tools.appointment_time import CLINIC_TIMEZONE
 from src.control.agents.tools.slot_tools import (
-    get_slots_by_date_and_criteria, get_slots_by_doctor, get_slots_by_specialty_and_location,
+    get_slots_by_date_and_criteria,
     get_specialties_for_branch, get_branch_doctors_info, get_branches_for_specialty, reserve_slot,
 )
 from src.control.agents.nodes.booking_helpers import _clean_loc, _clean_slot_time, _extract_time_of_day, _format_slot_time_str, _match_branch, _match_doctor
+
+
+def _slot_offer_response(
+    slots: list[dict[str, Any]], *, doctor=None, location=None, specialty=None,
+    requested_time=None, requested_window=None,
+):
+    candidates = slots
+    time_requested = requested_time is not None or requested_window is not None
+    if time_requested:
+        candidates = []
+        for slot in slots:
+            slot_dt = datetime.fromisoformat(slot["start_time"])
+            if slot_dt.tzinfo is None:
+                slot_dt = slot_dt.replace(tzinfo=timezone.utc)
+            local_clock = slot_dt.astimezone(CLINIC_TIMEZONE).time()
+            clock = (local_clock.hour, local_clock.minute)
+            if requested_time is not None and clock == requested_time:
+                candidates.append(slot)
+            elif requested_window is not None and requested_window[0] <= clock <= requested_window[1]:
+                candidates.append(slot)
+    offered = (candidates or slots)[:6]
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for slot in offered:
+        key = (str(slot.get("doctor_name") or "A doctor"), _clean_loc(slot.get("location_name")))
+        grouped.setdefault(key, []).append(slot)
+
+    group_labels = []
+    for (doctor_name, branch), doctor_slots in grouped.items():
+        local_datetimes = []
+        for slot in doctor_slots:
+            slot_dt = datetime.fromisoformat(slot["start_time"])
+            if slot_dt.tzinfo is None:
+                slot_dt = slot_dt.replace(tzinfo=timezone.utc)
+            local_datetimes.append(slot_dt.astimezone(CLINIC_TIMEZONE))
+        same_date = len({value.date() for value in local_datetimes}) == 1
+        if same_date:
+            date_label = local_datetimes[0].strftime("%A, %B %d")
+            times = ", ".join(value.strftime("%I:%M %p").lstrip("0") for value in local_datetimes)
+            availability = f"on {date_label}: {times}"
+        else:
+            options = "; ".join(
+                value.strftime("%A, %B %d at %I:%M %p").replace(" at 0", " at ")
+                for value in local_datetimes
+            )
+            availability = options
+        group_labels.append(f"{doctor_name} at {branch} has openings {availability}")
+
+    availability_text = "; ".join(group_labels)
+    if time_requested and not candidates:
+        answer = f"I couldn't find a slot at your requested time. Other available appointments are: {availability_text}."
+    else:
+        answer = f"Available appointments are: {availability_text}."
+    return {
+        "target_slot_id": None,
+        "target_slot_details": None,
+        "offered_slots": offered,
+        "awaiting_preferred_date": True,
+        "preferred_doctor": doctor,
+        "preferred_location": location,
+        "preferred_specialty": specialty,
+        "latest_agent_speech": answer + " Which date and time would you prefer? I will hold one after you choose it.",
+    }
+
+
+def _branch_availability_response(
+    slots: list[dict[str, Any]], *, location: str, specialty: str,
+) -> dict[str, Any]:
+    """Name available clinicians once, then ask for the patient's preferred date/time."""
+    doctors = list(dict.fromkeys(
+        str(slot.get("doctor_name") or "Doctor") for slot in slots if slot.get("doctor_name")
+    ))
+    branch = _clean_loc(location)
+    if len(doctors) == 1:
+        doctor = doctors[0]
+        if not doctor.lower().startswith("dr."):
+            doctor = f"Dr. {doctor}"
+        speech = (
+            f"For {specialty} at our {branch} branch, {doctor} is available. "
+            "What date and time would you prefer?"
+        )
+        preferred_doctor = doctors[0]
+    else:
+        formatted_doctors = [
+            name if name.lower().startswith("dr.") else f"Dr. {name}"
+            for name in doctors
+        ]
+        if len(formatted_doctors) == 2:
+            doctor_list = " and ".join(formatted_doctors)
+        elif len(formatted_doctors) > 2:
+            doctor_list = ", ".join(formatted_doctors[:-1]) + f", and {formatted_doctors[-1]}"
+        else:
+            doctor_list = formatted_doctors[0] if formatted_doctors else "our doctors"
+        speech = (
+            f"For {specialty} at our {branch} branch, available doctors are {doctor_list}. "
+            "Which doctor, date, and time would you prefer?"
+        )
+        preferred_doctor = None
+    return {
+        "target_slot_id": None,
+        "target_slot_details": None,
+        "offered_slots": [],
+        "awaiting_preferred_date": True,
+        "preferred_doctor": preferred_doctor,
+        "preferred_location": location,
+        "preferred_specialty": specialty,
+        "latest_agent_speech": speech,
+    }
+
+
+async def _discover_slots_for_request(
+    db: AsyncSession,
+    *,
+    doctor_name=None,
+    location_name=None,
+    specialty=None,
+    requested_time=None,
+    requested_window=None,
+    limit: int = 6,
+):
+    """Query requested clock constraints before limiting; fetch alternatives only if needed."""
+    criteria = {
+        "doctor_name": doctor_name,
+        "location_name": location_name,
+        "specialty": specialty,
+    }
+    slots = await get_slots_by_date_and_criteria(
+        db,
+        requested_time=requested_time,
+        requested_window=requested_window,
+        limit=limit,
+        **criteria,
+    )
+    if not slots and (requested_time is not None or requested_window is not None):
+        slots = await get_slots_by_date_and_criteria(db, limit=limit, **criteria)
+    return slots
 
 async def discover_booking_slots(
     *, state, db, user_speech, lower_speech, requested_time, requested_window,
     has_date_in_speech, parsed_date_start, alternative_date,
 ):
     """Handle date, doctor, branch, specialty slot discovery and fallback."""
+    # A non-date-specific offer is informational only. Hold a slot only after
+    # the patient identifies one of the actual options by its time.
+    offered_slots = state.get("offered_slots") or []
+    if offered_slots and not has_date_in_speech and (requested_time is not None or requested_window is not None):
+        matches = []
+        for slot in offered_slots:
+            slot_dt = datetime.fromisoformat(slot["start_time"])
+            if slot_dt.tzinfo is None:
+                slot_dt = slot_dt.replace(tzinfo=timezone.utc)
+            local_dt = slot_dt.astimezone(CLINIC_TIMEZONE)
+            clock = (local_dt.hour, local_dt.minute)
+            if requested_time is not None and clock == requested_time:
+                matches.append(slot)
+            elif requested_window is not None and requested_window[0] <= clock <= requested_window[1]:
+                matches.append(slot)
+        if len(matches) == 1:
+            chosen = matches[0]
+            await reserve_slot(chosen["slot_id"], db)
+            return {
+                "target_slot_id": chosen["slot_id"],
+                "target_slot_details": chosen,
+                "offered_slots": [],
+                "preferred_doctor": chosen["doctor_name"],
+                "preferred_location": chosen["location_name"],
+                "preferred_specialty": chosen["specialty"],
+                "preferred_date": chosen["start_time"],
+                "awaiting_preferred_date": False,
+                "latest_agent_speech": f"I have tentatively held {_format_slot_time_str(chosen['start_time'])} with {chosen['doctor_name']} at {_clean_loc(chosen['location_name'])}. Shall I book it?",
+            }
+        if len(matches) > 1:
+            labels = [_format_slot_time_str(s["start_time"]) for s in matches[:6]]
+            return {
+                "offered_slots": matches[:6],
+                "target_slot_id": None,
+                "target_slot_details": None,
+                "awaiting_preferred_date": True,
+                "latest_agent_speech": (
+                    f"I found more than one matching option: {', '.join(labels)}. Which date and time do you mean?"
+                ),
+            }
+        # A requested time range that is absent from the displayed list may
+        # still be available later on that same date (for example, afternoon
+        # after we initially showed morning slots). Continue to the saved-date
+        # database query below instead of repeating the old options.
     # 6. Find slots for an explicit date or previously requested date.
     saved_preferred_date = state.get("preferred_date")
     has_saved_preferred_date = bool(
@@ -49,20 +228,20 @@ async def discover_booking_slots(
                 doctor_name=doc,
                 location_name=loc,
                 specialty=spec,
+                requested_time=requested_time,
+                requested_window=requested_window,
                 limit=50,
             )
-            if not slots and doc:
+
+            # If the requested clock time is unavailable, check other openings
+            # on that same date before offering later dates.
+            if not slots and (requested_time is not None or requested_window is not None):
                 slots = await get_slots_by_date_and_criteria(
                     db,
-                    date_query=date_query,
+                    date_query=parsed_date_start.isoformat(),
                     doctor_name=doc,
-                    limit=50,
-                )
-            if not slots and loc:
-                slots = await get_slots_by_date_and_criteria(
-                    db,
-                    date_query=date_query,
                     location_name=loc,
+                    specialty=spec,
                     limit=50,
                 )
 
@@ -90,6 +269,7 @@ async def discover_booking_slots(
                             "preferred_location": loc,
                             "preferred_specialty": spec,
                             "preferred_date": parsed_date_start.isoformat(),
+                            "offered_slots": slots[:6],
                             "latest_agent_speech": (
                                 f"I couldn't find an opening between {start_clock[0]:02d}:{start_clock[1]:02d} and "
                                 f"{end_clock[0]:02d}:{end_clock[1]:02d} on {parsed_date_start.strftime('%A, %B %d')}. "
@@ -106,6 +286,7 @@ async def discover_booking_slots(
                             "preferred_location": loc,
                             "preferred_specialty": spec,
                             "preferred_date": parsed_date_start.isoformat(),
+                            "offered_slots": requested_slots[:6],
                             "latest_agent_speech": (
                                 f"I found these times within your preferred range on "
                                 f"{parsed_date_start.strftime('%A, %B %d')}: {', '.join(times)}. Which one works best?"
@@ -121,7 +302,14 @@ async def discover_booking_slots(
                         if (s_loc.hour, s_loc.minute) == requested_time:
                             requested_slots.append(s)
                     if not requested_slots:
-                        times = [_clean_slot_time(s["start_time"]) for s in slots[:6]]
+                        previously_offered_ids = {
+                            str(item.get("slot_id")) for item in offered_slots if item.get("slot_id")
+                        }
+                        alternatives = [
+                            slot for slot in slots
+                            if str(slot.get("slot_id")) in previously_offered_ids
+                        ] or slots
+                        times = [_clean_slot_time(s["start_time"]) for s in alternatives[:6]]
                         requested = f"{requested_time[0]:02d}:{requested_time[1]:02d}"
                         return {
                             "target_slot_id": None,
@@ -131,6 +319,7 @@ async def discover_booking_slots(
                             "preferred_location": loc,
                             "preferred_specialty": spec,
                             "preferred_date": parsed_date_start.isoformat(),
+                            "offered_slots": alternatives[:6],
                             "latest_agent_speech": (
                                 f"{requested} isn't available on {parsed_date_start.strftime('%A, %B %d')}. "
                                 f"Other available times are {', '.join(times)}. Which would you prefer?"
@@ -147,6 +336,7 @@ async def discover_booking_slots(
                         "preferred_location": loc,
                         "preferred_specialty": spec,
                         "preferred_date": parsed_date_start.isoformat(),
+                        "offered_slots": slots[:6],
                         "latest_agent_speech": (
                             f"I found these available times on {parsed_date_start.strftime('%A, %B %d')}: "
                             f"{', '.join(times)}. Which time would you like?"
@@ -176,6 +366,44 @@ async def discover_booking_slots(
                 }
             else:
                 desc = doc or spec or loc or "that request"
+                alt_slots = []
+                if doc:
+                    alt_slots = await _discover_slots_for_request(
+                        db, doctor_name=doc, requested_time=requested_time,
+                        requested_window=requested_window,
+                    )
+                elif spec and loc:
+                    alt_slots = await _discover_slots_for_request(
+                        db, specialty=spec, location_name=loc, requested_time=requested_time,
+                        requested_window=requested_window,
+                    )
+                elif spec:
+                    alt_slots = await _discover_slots_for_request(
+                        db, specialty=spec, requested_time=requested_time,
+                        requested_window=requested_window,
+                    )
+                elif loc:
+                    alt_slots = await _discover_slots_for_request(
+                        db, location_name=loc, requested_time=requested_time,
+                        requested_window=requested_window,
+                    )
+
+                if alt_slots:
+                    choices = "; ".join(s["formatted_speech"] for s in alt_slots[:3])
+                    speech = (
+                        f"I couldn't find an available slot on {parsed_date_start.strftime('%A, %B %d')} for {desc}. "
+                        f"The next available openings are: {choices}. Would any of those work for you?"
+                    )
+                    return {
+                        "target_slot_id": None,
+                        "target_slot_details": None,
+                        "offered_slots": alt_slots[:3],
+                        "awaiting_preferred_date": True,
+                        "preferred_doctor": doc,
+                        "preferred_location": loc,
+                        "preferred_specialty": spec,
+                        "latest_agent_speech": speech,
+                    }
                 speech = (
                     f"I'm sorry, we don't have any openings on {parsed_date_start.strftime('%B %d')} "
                     f"for {desc}. Would you like to check another date or another branch?"
@@ -183,6 +411,7 @@ async def discover_booking_slots(
                 return {
                     "target_slot_id": None,
                     "target_slot_details": None,
+                    "offered_slots": [],
                     "awaiting_preferred_date": True,
                     "preferred_doctor": doc,
                     "preferred_location": loc,
@@ -225,32 +454,16 @@ async def discover_booking_slots(
     # 8. Patient specifies a Doctor by name
     if named_doctor:
         loc = mentioned_branch or state.get("preferred_location")
-        slots = await get_slots_by_date_and_criteria(
+        slots = await _discover_slots_for_request(
             db,
             doctor_name=named_doctor,
             location_name=loc,
-            limit=3,
+            requested_time=requested_time,
+            requested_window=requested_window,
         )
-        if not slots:
-            slots = await get_slots_by_doctor(named_doctor, db, limit=3)
 
         if slots:
-            first_slot = slots[0]
-            await reserve_slot(first_slot["slot_id"], db)
-            formatted_time = _format_slot_time_str(first_slot["start_time"])
-            speech = (
-                f"I have an opening with {first_slot['doctor_name']} at our "
-                f"{_clean_loc(first_slot['location_name'])} branch on {formatted_time}. "
-                f"Shall I go ahead and book this appointment for you?"
-            )
-            return {
-                "target_slot_id": first_slot["slot_id"],
-                "target_slot_details": first_slot,
-                "preferred_doctor": first_slot["doctor_name"],
-                "preferred_location": first_slot["location_name"],
-                "preferred_specialty": first_slot["specialty"],
-                "latest_agent_speech": speech,
-            }
+            return _slot_offer_response(slots, doctor=named_doctor, location=loc, specialty=slots[0].get("specialty"), requested_time=requested_time, requested_window=requested_window)
         else:
             return {
                 "target_slot_id": None,
@@ -287,24 +500,14 @@ async def discover_booking_slots(
                 }
             else:
                 # Branch DOES offer this specialty!
-                slots = await get_slots_by_specialty_and_location(active_specialty, mentioned_branch, db)
+                slots = await _discover_slots_for_request(
+                    db, specialty=active_specialty, location_name=mentioned_branch,
+                    requested_time=requested_time, requested_window=requested_window,
+                )
                 if slots:
-                    first_slot = slots[0]
-                    await reserve_slot(first_slot["slot_id"], db)
-                    time_str = _format_slot_time_str(first_slot["start_time"])
-                    speech = (
-                        f"For {active_specialty} at our {_clean_loc(first_slot['location_name'])} branch, "
-                        f"I have an opening with {first_slot['doctor_name']} on {time_str}. "
-                        f"Shall I go ahead and book this appointment for you?"
+                    return _branch_availability_response(
+                        slots, location=mentioned_branch, specialty=active_specialty,
                     )
-                    return {
-                        "target_slot_id": first_slot["slot_id"],
-                        "target_slot_details": first_slot,
-                        "preferred_specialty": active_specialty,
-                        "preferred_location": first_slot["location_name"],
-                        "preferred_doctor": first_slot["doctor_name"],
-                        "latest_agent_speech": speech,
-                    }
                 else:
                     return {
                         "preferred_location": mentioned_branch,
@@ -367,24 +570,12 @@ async def discover_booking_slots(
         if loc:
             branch_specialties = get_specialties_for_branch(loc)
             if specialty_match in branch_specialties:
-                slots = await get_slots_by_specialty_and_location(specialty_match, loc, db)
+                slots = await _discover_slots_for_request(
+                    db, specialty=specialty_match, location_name=loc,
+                    requested_time=requested_time, requested_window=requested_window,
+                )
                 if slots:
-                    first_slot = slots[0]
-                    await reserve_slot(first_slot["slot_id"], db)
-                    time_str = _format_slot_time_str(first_slot["start_time"])
-                    speech = (
-                        f"For {specialty_match} at our {_clean_loc(first_slot['location_name'])} branch, "
-                        f"I have an opening with {first_slot['doctor_name']} on {time_str}. "
-                        f"Shall I go ahead and book this appointment for you?"
-                    )
-                    return {
-                        "target_slot_id": first_slot["slot_id"],
-                        "target_slot_details": first_slot,
-                        "preferred_specialty": specialty_match,
-                        "preferred_location": first_slot["location_name"],
-                        "preferred_doctor": first_slot["doctor_name"],
-                        "latest_agent_speech": speech,
-                    }
+                    return _slot_offer_response(slots, location=loc, specialty=specialty_match, requested_time=requested_time, requested_window=requested_window)
             else:
                 avail_branches = get_branches_for_specialty(specialty_match)
                 avail_text = ", ".join(avail_branches[:-1]) + f", or {avail_branches[-1]}" if len(avail_branches) > 1 else (avail_branches[0] if avail_branches else "our other")

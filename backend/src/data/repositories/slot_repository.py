@@ -1,10 +1,10 @@
 """Slot repository — query available slots and manage reservations."""
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Optional
 
 # pyrefly: ignore[missing-import]
-from sqlalchemy import select, update, and_
+from sqlalchemy import Time, select, update, and_, func
 # pyrefly: ignore[missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 # pyrefly: ignore[missing-import]
@@ -13,6 +13,10 @@ from sqlalchemy.orm import selectinload
 from src.constants.enums import SlotStatus
 from src.config.settings import settings
 from src.data.models.postgres.slot import Slot
+
+
+class SlotUnavailableError(ValueError):
+    """Raised when a slot selected from stale availability is no longer free."""
 
 
 class SlotRepository:
@@ -139,6 +143,8 @@ class SlotRepository:
         specialty: Optional[str] = None,
         location_name: Optional[str] = None,
         doctor_name: Optional[str] = None,
+        clinic_time_gte: Optional[time] = None,
+        clinic_time_lte: Optional[time] = None,
         limit: int = 5,
     ) -> list[Slot]:
         """Query available slots filtered by date range, specialty, location, and doctor."""
@@ -169,6 +175,16 @@ class SlotRepository:
         if doctor_name:
             stmt = stmt.where(Provider.full_name.ilike(f"%{doctor_name}%"))
 
+        # Appointment times are stored in UTC. Filter requested clock times in
+        # the clinic timezone in SQL so no out-of-range slot can be offered by
+        # a later in-memory fallback.
+        if clinic_time_gte or clinic_time_lte:
+            local_time = func.timezone("Asia/Kolkata", Slot.start_time).cast(Time)
+            if clinic_time_gte:
+                stmt = stmt.where(local_time >= clinic_time_gte)
+            if clinic_time_lte:
+                stmt = stmt.where(local_time <= clinic_time_lte)
+
         stmt = stmt.order_by(Slot.start_time).limit(limit)
         result = await self.db.scalars(stmt)
         return list(result.all())
@@ -188,9 +204,9 @@ class SlotRepository:
         )
         slot = result.one_or_none()
         if not slot:
-            raise ValueError(f"Slot {slot_id} not found")
+            raise SlotUnavailableError(f"Slot {slot_id} not found")
         if slot.status != SlotStatus.AVAILABLE:
-            raise ValueError(f"Slot {slot_id} is no longer available (status={slot.status})")
+            raise SlotUnavailableError(f"Slot {slot_id} is no longer available (status={slot.status})")
 
         slot.status = SlotStatus.RESERVED
         slot.reserved_until = datetime.utcnow() + timedelta(

@@ -24,6 +24,7 @@ class CallState(TypedDict, total=False):
     # ── Intent ────────────────────────────────────────────────────────────────
     # One of: "book", "reschedule", "cancel", "faq", "handoff", "unknown", "greet", "identity", "register", "close"
     intent: Optional[str]
+    semantic_label: Optional[str]
 
     # ── Dialogue / LLM Context ────────────────────────────────────────────────
     messages: List[Dict[str, str]]  # list of {"role": "user"|"assistant"|"system", "content": "..."}
@@ -43,8 +44,14 @@ class CallState(TypedDict, total=False):
     preferred_location: Optional[str]
     preferred_doctor: Optional[str]
     preferred_date: Optional[str]
+    preferred_appointment_type: Optional[str]
+    awaiting_followup_visit: bool
+    followup_candidates: Optional[List[Dict[str, Any]]]
+    awaiting_followup_decision: bool
     awaiting_preferred_date: bool
     awaiting_patient_email: bool
+    awaiting_cancel_confirmation: bool
+    awaiting_change_action_choice: bool
     slot_reserved_at: Optional[str]
     booking_confirmed: bool
 
@@ -53,4 +60,8 @@ class CallState(TypedDict, total=False):
     low_confidence_count: int
     handoff_required: bool
     handoff_reason: Optional[str]
+    awaiting_handoff_contact: bool
+    handoff_completed: bool
+    frontdesk_alert_sent: bool
+    is_emergency: bool
     is_completed: bool

@@ -1,5 +1,6 @@
 """Browser voice-assistant endpoints, separate from Twilio outbound calls."""
 from src.constants.enums import ChannelType
+import asyncio
 import base64
 import logging
 import time
@@ -12,19 +13,30 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from src.config.settings import settings
-from src.control.agents.graph import agent_graph
 from src.control.agents.tools.registration_tools import is_greeting
 from src.data.clients.postgres import AsyncSessionLocal
 from src.data.repositories.conversation_repository import ConversationRepository
 from src.services.gemini_service import GeminiService
 from src.services.sarvam_service import SarvamService
+from src.services.conversation_turn_service import conversation_turn_service
+from src.services.audio_storage_service import audio_storage_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/voice-assistant", tags=["Browser Voice Assistant"])
 sarvam_service = SarvamService()
 gemini_service = GeminiService()
-_audio_cache: dict[str, tuple[bytes, float]] = {}
 _SUPPORTED_LANGUAGES = {"en-IN", "ta-IN", "te-IN"}
+
+_VOICE_RETRY_MESSAGES = {
+    "en-IN": "I could not hear that clearly. Please try speaking again.",
+    "ta-IN": "உங்கள் குரலை தெளிவாகக் கேட்க முடியவில்லை. தயவுசெய்து மீண்டும் பேசவும்.",
+    "te-IN": "మీ మాటలను స్పష్టంగా వినలేకపోయాను. దయచేసి మళ్లీ మాట్లాడండి.",
+}
+_VOICE_PROCESSING_MESSAGES = {
+    "en-IN": "I am sorry, this is taking longer than expected. Please try again.",
+    "ta-IN": "மன்னிக்கவும், இது எதிர்பார்த்ததை விட அதிக நேரம் எடுக்கிறது. தயவுசெய்து மீண்டும் முயற்சிக்கவும்.",
+    "te-IN": "క్షమించండి, దీనికి ఊహించిన దానికంటే ఎక్కువ సమయం పడుతోంది. దయచేసి మళ్లీ ప్రయత్నించండి.",
+}
 
 
 def _normalize_language(language: str) -> str:
@@ -45,7 +57,10 @@ async def _translate(text: str, target_language: str) -> str:
         "Return only the translation.\n\n"
         f"Message: {text}"
     )
-    return await gemini_service.generate_content(prompt, temperature=0.0)
+    return await asyncio.wait_for(
+        gemini_service.generate_content(prompt, temperature=0.0),
+        timeout=settings.VOICE_ASSISTANT_TRANSLATION_TIMEOUT_SECONDS,
+    )
 
 
 async def _to_english(text: str, language: str) -> str:
@@ -56,17 +71,53 @@ async def _to_english(text: str, language: str) -> str:
         "Return only the translation and preserve names, dates, times, doctors, and locations.\n\n"
         f"Message: {text}"
     )
-    return await gemini_service.generate_content(prompt, temperature=0.0)
+    return await asyncio.wait_for(
+        gemini_service.generate_content(prompt, temperature=0.0),
+        timeout=settings.VOICE_ASSISTANT_TRANSLATION_TIMEOUT_SECONDS,
+    )
+
+
+async def _run_voice_turn_in_isolated_session(**kwargs):
+    """Run a graph turn in a session that is rolled back on cancellation.
+
+    The browser timeout must never reuse a cancelled action session to store a
+    fallback response. That would risk committing a partially executed booking
+    or reschedule operation.
+    """
+    async with AsyncSessionLocal() as turn_session:
+        try:
+            return await conversation_turn_service.run_turn(turn_session, **kwargs)
+        except BaseException:
+            await turn_session.rollback()
+            raise
+
+
+def _voice_retry_message(language: str) -> str:
+    return _VOICE_RETRY_MESSAGES.get(_normalize_language(language), _VOICE_RETRY_MESSAGES["en-IN"])
+
+
+def _voice_processing_message(language: str) -> str:
+    return _VOICE_PROCESSING_MESSAGES.get(_normalize_language(language), _VOICE_PROCESSING_MESSAGES["en-IN"])
 
 
 @router.post("/session")
 async def create_voice_session():
     session_id = f"browser_voice_{uuid4().hex}"
+    greeting = f"Hello! Welcome to {settings.CLINIC_NAME}. How can I help you today?"
+    async with AsyncSessionLocal() as session:
+        conversation_repo = ConversationRepository(session)
+        conversation = await conversation_repo.create(
+            channel=ChannelType.VOICE,
+            call_sid=session_id,
+        )
+        await conversation_turn_service.save_message(
+            session, conversation.id, role="agent", content=greeting,
+        )
     return {
         "session_id": session_id,
         "preferred_language": "en-IN",
         "language_confirmed": False,
-        "greeting": f"Hello! Welcome to {settings.CLINIC_NAME}. How can I help you today?",
+        "greeting": greeting,
     }
 
 
@@ -85,6 +136,14 @@ async def process_voice_turn(
                 channel=ChannelType.VOICE,
                 call_sid=session_id,
             )
+            await conversation_turn_service.save_message(
+                session, conversation.id, role="agent",
+                content=f"Hello! Welcome to {settings.CLINIC_NAME}. How can I assist you today?",
+            )
+        saved_language = _normalize_language(
+            (conversation.collected_details or {}).get("preferred_language", "")
+        ) if conversation else "en-IN"
+        stt_language = saved_language if saved_language in {"ta-IN", "te-IN"} else "unknown"
 
     audio_bytes = await audio.read()
     if not audio_bytes:
@@ -92,21 +151,41 @@ async def process_voice_turn(
             conversation_repo = ConversationRepository(session)
             conversation = await conversation_repo.get_by_call_sid(session_id)
             if conversation:
-                await conversation_repo.append_message(
-                    conversation.id,
-                    role="patient",
-                    content="[Voice input was empty]",
-                    metadata={"event_type": "voice_input_error"},
+                await conversation_turn_service.save_message(
+                    session, conversation.id, role="patient", content="[Voice input was empty]",
+                    metadata={"event_type": "voice_input_error", "stage": "stt"},
                 )
-        raise HTTPException(status_code=400, detail="Audio input is empty.")
+                await conversation_turn_service.save_message(
+                    session, conversation.id, role="agent",
+                    content="I did not receive any audio. Please try speaking again.",
+                    metadata={"event_type": "stt_error", "stage": "stt"},
+                )
+        return {
+            "session_id": session_id, "transcript": "", "language": "en-IN",
+            "language_confidence": 0.0,
+            "reply": "I did not receive any audio. Please try speaking again.",
+            "audio_url": None, "is_completed": False, "target_slot": None,
+            "booking_confirmed": False,
+        }
 
+    stt_started = time.perf_counter()
     transcript, detected_language, confidence = await sarvam_service.speech_to_text(
         audio_bytes,
         filename=audio.filename or "voice.webm",
-        language_code="unknown",
+        language_code=stt_language,
         content_type=audio.content_type,
     )
-    language = _normalize_language(detected_language)
+    logger.info(
+        "Voice assistant STT completed: session_id=%s language_hint=%s duration=%.3fs transcript=%s",
+        session_id, stt_language, time.perf_counter() - stt_started, bool(transcript),
+    )
+    # Once the patient has used Tamil or Telugu in this session, keep that
+    # language stable even if a later provider response omits or mislabels it.
+    language = (
+        stt_language
+        if stt_language in {"ta-IN", "te-IN"}
+        else _normalize_language(detected_language)
+    )
     if language not in _SUPPORTED_LANGUAGES:
         language = "en-IN"
     elif confidence < settings.VOICE_ASSISTANT_LANGUAGE_CONFIDENCE_THRESHOLD:
@@ -119,30 +198,60 @@ async def process_voice_turn(
             language,
         )
     if not transcript:
+        logger.warning("Voice assistant STT produced no transcript: session_id=%s error_stage=stt", session_id)
+        failure_language = stt_language if stt_language in _SUPPORTED_LANGUAGES else language
+        failure_reply = _voice_retry_message(failure_language)
         async with AsyncSessionLocal() as session:
             conversation_repo = ConversationRepository(session)
             conversation = await conversation_repo.get_by_call_sid(session_id)
             if conversation:
-                await conversation_repo.append_message(
-                    conversation.id,
-                    role="patient",
+                await conversation_turn_service.save_message(
+                    session, conversation.id, role="patient",
                     content="[Voice input could not be transcribed]",
-                    metadata={"event_type": "stt_error", "language": language},
+                    metadata={"event_type": "stt_error", "stage": "stt", "language": failure_language},
                 )
-        raise HTTPException(status_code=422, detail="Could not understand the audio.")
+                await conversation_turn_service.save_message(
+                    session, conversation.id, role="agent", content=failure_reply,
+                    metadata={"event_type": "stt_error", "stage": "stt"},
+                )
+        return {
+            "session_id": session_id, "transcript": "", "language": failure_language,
+            "language_confidence": confidence, "reply": failure_reply,
+            "audio_url": None, "is_completed": False, "target_slot": None,
+            "booking_confirmed": False,
+        }
 
     async with AsyncSessionLocal() as session:
         conversation_repo = ConversationRepository(session)
         conversation = await conversation_repo.get_by_call_sid(session_id)
         if conversation:
-            await conversation_repo.append_message(
-                conversation.id,
-                role="patient",
-                content=transcript,
+            await conversation_turn_service.save_message(
+                session, conversation.id, role="patient", content=transcript,
                 metadata={"language": language, "confidence": confidence},
             )
 
-    agent_input = await _to_english(transcript, language)
+    try:
+        translation_started = time.perf_counter()
+        agent_input = await _to_english(transcript, language)
+        logger.info(
+            "Voice assistant input translation completed: session_id=%s language=%s duration=%.3fs",
+            session_id, language, time.perf_counter() - translation_started,
+        )
+    except Exception:
+        logger.exception("Voice input translation failed: session_id=%s error_stage=input_translation", session_id)
+        reply = _voice_retry_message(language)
+        async with AsyncSessionLocal() as session:
+            failed_conversation = await ConversationRepository(session).get_by_call_sid(session_id)
+            if failed_conversation:
+                await conversation_turn_service.save_message(
+                    session, failed_conversation.id, role="agent", content=reply,
+                    metadata={"event_type": "translation_error", "stage": "input_translation"},
+                )
+        return {
+            "session_id": session_id, "transcript": transcript, "language": language,
+            "language_confidence": confidence, "reply": reply, "audio_url": None,
+            "is_completed": False, "target_slot": None, "booking_confirmed": False,
+        }
     async with AsyncSessionLocal() as session:
         conversation_repo = ConversationRepository(session)
         existing_conversation = await conversation_repo.get_by_call_sid(session_id)
@@ -175,7 +284,10 @@ async def process_voice_turn(
             "channel": "voice_assistant",
             "latest_user_speech": agent_input,
             "messages": list(existing_conversation.messages or []),
-            "is_verified": bool(saved_details.get("is_verified", False)),
+            "is_verified": bool(
+                existing_conversation.identity_verified_at
+                or saved_details.get("is_verified", False)
+            ),
             "is_new_patient": bool(saved_details.get("is_new_patient")),
             "awaiting_identity_verification": bool(saved_details.get("awaiting_identity_verification")),
             "pending_intent": saved_details.get("pending_intent"),
@@ -186,125 +298,105 @@ async def process_voice_turn(
         }
         for field in (
             "patient_id",
+            "patient_phone",
+            "patient_email",
             "target_slot_id",
             "target_slot_details",
+            "offered_slots",
             "active_appointment_id",
             "active_appointment_details",
             "preferred_specialty",
             "preferred_location",
             "preferred_doctor",
             "preferred_date",
+            "preferred_appointment_type",
+            "awaiting_followup_visit",
+            "followup_candidates",
+            "awaiting_followup_decision",
             "awaiting_preferred_date",
             "awaiting_patient_email",
+            "awaiting_cancel_confirmation",
+            "awaiting_change_action_choice",
+            "verify_attempts",
+            "handoff_required",
+            "handoff_reason",
+            "awaiting_handoff_contact",
+            "handoff_completed",
+            "frontdesk_alert_sent",
+            "is_emergency",
         ):
             if field in saved_details:
                 input_state[field] = saved_details[field]
 
-        try:
-            result = await agent_graph.ainvoke(
-                input_state,
-                config={"configurable": {"thread_id": session_id, "db": session}},
-            )
-        except Exception:
-            logger.exception("Browser voice agent turn failed for session %s", session_id)
-            reply = "I’m sorry, I had trouble processing that. Please repeat your request or contact the front desk."
-            await conversation_repo.append_message(
-                existing_conversation.id,
-                role="agent",
-                content=reply,
-                metadata={"event_type": "turn_error"},
-            )
-            return {
-                "session_id": session_id,
-                "transcript": transcript,
-                "language": language,
-                "language_confidence": confidence,
-                "reply": reply,
-                "audio_url": None,
-                "is_completed": False,
-                "target_slot": None,
-                "booking_confirmed": False,
-            }
-
-        reply_english = result.get("latest_agent_speech") or "How can I help you with your appointment today?"
-        reply = await _translate(reply_english, language)
-        if result.get("booking_confirmed"):
-            await conversation_repo.record_action_outcome(
-                existing_conversation.id,
-                result.get("intent"),
-            )
-        await conversation_repo.append_message(
-            existing_conversation.id,
-            role="agent",
-            content=reply,
+        input_state["latest_agent_speech"] = next(
+            (message.get("content") for message in reversed(existing_conversation.messages or [])
+             if message.get("role") == "agent"),
+            "",
         )
 
-        persisted_fields = {
-            field: result[field]
-            for field in (
-                "patient_id",
-                "patient_name",
-                "target_slot_id",
-                "target_slot_details",
-                "active_appointment_id",
-                "active_appointment_details",
-                "preferred_specialty",
-                "preferred_location",
-                "preferred_doctor",
-                "preferred_date",
-                "awaiting_preferred_date",
-                "awaiting_patient_email",
-                "intent",
+        try:
+            agent_started = time.perf_counter()
+            turn = await asyncio.wait_for(
+                _run_voice_turn_in_isolated_session(
+                    conversation_id=existing_conversation.id,
+                    thread_id=session_id,
+                    channel="voice_assistant",
+                    patient_text=transcript,
+                    patient_message_saved=True,
+                    input_state=input_state,
+                    response_transform=lambda text: _translate(text, language),
+                ),
+                timeout=settings.VOICE_ASSISTANT_TURN_TIMEOUT_SECONDS,
             )
-            if field in result and result[field] is not None
-        }
-        if "target_slot_id" in result and result["target_slot_id"] is None:
-            persisted_fields["target_slot_id"] = None
-            persisted_fields["target_slot_details"] = None
-        if "awaiting_preferred_date" in result:
-            persisted_fields["awaiting_preferred_date"] = result["awaiting_preferred_date"]
-        if "awaiting_patient_email" in result:
-            persisted_fields["awaiting_patient_email"] = result["awaiting_patient_email"]
-        if "awaiting_identity_verification" in result:
-            persisted_fields["awaiting_identity_verification"] = result["awaiting_identity_verification"]
-        if "pending_intent" in result:
-            persisted_fields["pending_intent"] = result["pending_intent"]
-        if result.get("patient_phone"):
-            persisted_fields["patient_phone"] = result["patient_phone"]
-        if result.get("patient_email"):
-            persisted_fields["patient_email"] = result["patient_email"]
-        if result.get("patient_name"):
-            persisted_fields["patient_name"] = result["patient_name"]
-            persisted_fields["registration_name"] = result["patient_name"]
-        if result.get("patient_dob") is not None:
-            persisted_fields["patient_dob"] = str(result["patient_dob"])
-            persisted_fields["registration_dob"] = str(result["patient_dob"])
-        if result.get("is_new_patient") is not None:
-            persisted_fields["is_new_patient"] = result["is_new_patient"]
-        if "is_verified" in result:
-            persisted_fields["is_verified"] = result["is_verified"]
-        if persisted_fields:
-            await conversation_repo.update_collected_details(
-                existing_conversation.id,
-                persisted_fields,
+            logger.info(
+                "Voice assistant agent turn completed: session_id=%s language=%s duration=%.3fs",
+                session_id, language, time.perf_counter() - agent_started,
             )
-        if result.get("patient_id"):
-            try:
-                import uuid
-                await conversation_repo.update_patient(
-                    existing_conversation.id,
-                    uuid.UUID(str(result["patient_id"])),
-                )
-            except Exception:
-                pass
-        await session.commit()
+        except asyncio.TimeoutError:
+            logger.warning("Voice assistant agent turn timed out: session_id=%s", session_id)
+            reply = _voice_processing_message(language)
+            await conversation_turn_service.save_message(
+                session, existing_conversation.id, role="agent", content=reply,
+                metadata={"event_type": "timeout", "stage": "agent_turn", "language": language},
+            )
+            await session.commit()
+            return {
+                "session_id": session_id, "transcript": transcript, "language": language,
+                "language_confidence": confidence, "reply": reply, "audio_url": None,
+                "is_completed": False, "target_slot": None, "booking_confirmed": False,
+            }
+        result = turn.state
+        reply = turn.speech
     audio_url = None
     if settings.VOICE_ASSISTANT_TTS_ENABLED:
-        generated_audio = await sarvam_service.text_to_speech(reply, target_language_code=language)
-        if generated_audio:
-            audio_id = uuid4().hex
-            _audio_cache[audio_id] = (generated_audio, time.time() + 900)
-            audio_url = f"/api/voice-assistant/audio/{audio_id}"
+        try:
+            tts_started = time.perf_counter()
+            generated_audio = await sarvam_service.text_to_speech(reply, target_language_code=language)
+            if not generated_audio:
+                # A transient empty TTS result should not immediately force the
+                # browser fallback. Retry once for both Tamil and Telugu.
+                generated_audio = await sarvam_service.text_to_speech(reply, target_language_code=language)
+            logger.info(
+                "Voice assistant TTS completed: session_id=%s language=%s duration=%.3fs audio=%s",
+                session_id, language, time.perf_counter() - tts_started, bool(generated_audio),
+            )
+            if generated_audio:
+                audio_id = await audio_storage_service.store(generated_audio)
+                audio_url = f"/api/voice-assistant/audio/{audio_id}"
+            else:
+                logger.warning("Voice assistant TTS returned no audio: session_id=%s error_stage=tts", session_id)
+                async with AsyncSessionLocal() as event_session:
+                    await conversation_turn_service.annotate_last_agent_message(
+                        event_session, existing_conversation.id,
+                        {"audio_delivery": "browser_fallback", "tts_error": "empty_audio"},
+                    )
+        except Exception:
+            logger.exception("Voice assistant TTS failed: session_id=%s error_stage=tts", session_id)
+            async with AsyncSessionLocal() as event_session:
+                await conversation_turn_service.annotate_last_agent_message(
+                    event_session, existing_conversation.id,
+                    {"audio_delivery": "browser_fallback", "tts_error": "provider_exception"},
+                )
 
     return {
         "session_id": session_id,
@@ -331,15 +423,13 @@ async def generate_voice_assistant_tts(req: TTSRequest):
     generated_audio = await sarvam_service.text_to_speech(req.text.strip(), target_language_code=req.language)
     if not generated_audio:
         raise HTTPException(status_code=500, detail="Failed to synthesize speech.")
-    audio_id = uuid4().hex
-    _audio_cache[audio_id] = (generated_audio, time.time() + 900)
+    audio_id = await audio_storage_service.store(generated_audio)
     return {"audio_url": f"/api/voice-assistant/audio/{audio_id}"}
 
 
 @router.get("/audio/{audio_id}")
 async def get_voice_audio(audio_id: str):
-    cached = _audio_cache.get(audio_id)
-    if not cached or cached[1] <= time.time():
-        _audio_cache.pop(audio_id, None)
+    audio = await audio_storage_service.get(audio_id)
+    if audio is None:
         raise HTTPException(status_code=404, detail="Audio expired or not found.")
-    return Response(content=cached[0], media_type="audio/wav")
+    return Response(content=audio, media_type="audio/wav")

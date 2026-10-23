@@ -45,10 +45,14 @@ class SarvamService:
             "model": self.stt_model,
             "language_code": language_code,
         }
+        # MediaRecorder may report values such as
+        # ``audio/webm;codecs=opus``. Sarvam expects the base MIME type.
+        normalized_content_type = (content_type or "").split(";", 1)[0].strip()
+        if not normalized_content_type:
+            normalized_content_type = mimetypes.guess_type(filename)[0] or "audio/wav"
         files = {
-            # Browser MediaRecorder commonly sends WebM; preserve its actual
-            # type so the provider can decode it and detect Tamil/Telugu.
-            "file": (filename, audio_bytes, content_type or mimetypes.guess_type(filename)[0] or "audio/wav"),
+            # Preserve the actual format while stripping optional codec params.
+            "file": (filename, audio_bytes, normalized_content_type),
         }
 
         async with httpx.AsyncClient(timeout=10.0) as client:

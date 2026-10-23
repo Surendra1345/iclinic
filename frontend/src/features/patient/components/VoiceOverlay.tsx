@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Mic, MicOff, X, Volume2, Sparkles, AlertCircle } from 'lucide-react'
 import { Button } from '../../../components/ui/Button'
 import { patientService } from '../services/patientService'
+import { resolveVoiceAudioUrl, selectMaleSpeechVoice } from './selectMaleSpeechVoice'
 import type { ChatMessage } from '../../../types'
 
 interface VoiceOverlayProps {
@@ -227,15 +228,10 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({
 
       const utterance = new SpeechSynthesisUtterance(text)
       utterance.rate = 1.05
-      utterance.pitch = 1.0
+      utterance.pitch = 0.85
       activeUtteranceRef.current = utterance
 
-      const voices = window.speechSynthesis.getVoices()
-      const preferredVoice =
-        voices.find((v) => v.lang.toLowerCase() === language.toLowerCase()) ||
-        voices.find((v) => v.lang.toLowerCase().startsWith(language.slice(0, 2).toLowerCase())) ||
-        voices.find((v) => v.name.includes('Google') || v.name.includes('Natural')) ||
-        voices[0]
+      const preferredVoice = selectMaleSpeechVoice(window.speechSynthesis.getVoices(), language)
 
       if (preferredVoice) {
         utterance.voice = preferredVoice
@@ -281,7 +277,7 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({
 
     if (audioUrl) {
       try {
-        const audio = new Audio(audioUrl)
+        const audio = new Audio(resolveVoiceAudioUrl(audioUrl))
         currentAudioRef.current = audio
 
         audio.onplay = () => {
@@ -353,8 +349,12 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({
       onNewMessage(botMsg)
       setLastAgentSpeech(response.reply)
       playAgentVoice(response.reply, response.audio_url, response.language)
-    } catch {
-      const fallback = 'I apologize, I could not complete your request. Please try speaking again.'
+    } catch (error) {
+      const responseDetail = (error as {
+        response?: { data?: { detail?: string } }
+      })?.response?.data?.detail
+      const fallback = 'I could not complete that voice request. Please try speaking again.'
+      setSpeechError(responseDetail || 'The voice service could not complete this turn. Your saved transcript, if received, remains in the conversation history.')
       setLastAgentSpeech(fallback)
       playAgentVoice(fallback)
     } finally {
@@ -426,10 +426,10 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-between p-6 bg-slate-950/95 backdrop-blur-2xl animate-fadeIn">
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-between p-6 bg-[#F6F9FB]/95 backdrop-blur-2xl animate-fadeIn text-[#0F172A]">
       {/* Top Header */}
       <div className="w-full max-w-xl flex items-center justify-between">
-        <div className="flex items-center gap-2 text-xs text-teal-400 font-medium tracking-wide uppercase">
+        <div className="flex items-center gap-2 text-xs text-[#0D9488] font-bold tracking-wide uppercase">
           <Sparkles className="w-4 h-4 animate-spin" />
           <span>City Care Live Voice</span>
         </div>
@@ -441,21 +441,21 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({
               setHandsFreeMode(next)
               handsFreeRef.current = next
             }}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all flex items-center gap-1.5 cursor-pointer ${
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-all flex items-center gap-1.5 cursor-pointer ${
               handsFreeMode
-                ? 'bg-teal-500/20 border-teal-500/50 text-teal-300 shadow-sm shadow-teal-500/20'
-                : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-slate-200'
+                ? 'bg-[#CCFBF1] border-[#99F6E4] text-[#0D9488] shadow-sm'
+                : 'bg-white border-[#CBD5E1] text-[#64748B] hover:text-[#0F172A]'
             }`}
             title="Toggle Hands-Free Auto-Listen Mode"
           >
-            <Sparkles className={`w-3.5 h-3.5 ${handsFreeMode ? 'text-teal-400 animate-pulse' : 'text-slate-500'}`} />
+            <Sparkles className={`w-3.5 h-3.5 ${handsFreeMode ? 'text-[#0D9488] animate-pulse' : 'text-[#64748B]'}`} />
             <span>Hands-Free: {handsFreeMode ? 'ON' : 'OFF'}</span>
           </button>
 
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-full text-slate-400 hover:text-white bg-slate-900 border border-slate-800 transition-colors cursor-pointer"
+            className="p-2 rounded-full text-[#64748B] hover:text-[#0F172A] bg-white border border-[#E2E8F0] shadow-sm transition-colors cursor-pointer"
             title="Close Voice Assistant"
           >
             <X className="w-5 h-5" />
@@ -463,19 +463,19 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({
         </div>
       </div>
 
-      {/* Central Pulsating Voice Sphere (ChatGPT Voice Mode style) */}
+      {/* Central Pulsating Voice Sphere */}
       <div className="flex flex-col items-center justify-center space-y-8 my-auto max-w-lg text-center">
         <div className="relative flex items-center justify-center">
           {/* Animated Glow Rings */}
           <div
             className={`absolute w-56 h-56 rounded-full transition-all duration-700 blur-2xl ${
               isSpeaking
-                ? 'bg-teal-500/40 scale-125 animate-pulse'
+                ? 'bg-teal-500/30 scale-125 animate-pulse'
                 : isListening
-                ? 'bg-emerald-500/40 scale-110 animate-pulse'
+                ? 'bg-emerald-500/30 scale-110 animate-pulse'
                 : isProcessing
-                ? 'bg-cyan-500/30 scale-100 animate-spin'
-                : 'bg-slate-700/20 scale-90'
+                ? 'bg-cyan-500/20 scale-100 animate-spin'
+                : 'bg-teal-500/10 scale-90'
             }`}
           />
 
@@ -485,29 +485,29 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({
             onClick={toggleMic}
             className={`relative w-36 h-36 rounded-full flex items-center justify-center transition-all duration-500 shadow-2xl border cursor-pointer outline-none ${
               isSpeaking
-                ? 'bg-gradient-to-tr from-teal-400 via-cyan-500 to-emerald-400 border-teal-300 scale-105 shadow-teal-500/50'
+                ? 'bg-gradient-to-tr from-[#14B8A6] via-[#06B6D4] to-[#10B981] border-teal-300 scale-105 shadow-teal-500/40'
                 : isListening
-                ? 'bg-gradient-to-tr from-emerald-500 via-teal-500 to-cyan-500 border-emerald-300 scale-100 shadow-emerald-500/50'
+                ? 'bg-gradient-to-tr from-[#10B981] via-[#14B8A6] to-[#06B6D4] border-emerald-300 scale-100 shadow-emerald-500/40'
                 : isProcessing
-                ? 'bg-gradient-to-tr from-cyan-600 to-teal-700 border-cyan-400 animate-pulse shadow-cyan-500/40'
-                : 'bg-slate-900 border-slate-700 hover:border-teal-500/50'
+                ? 'bg-gradient-to-tr from-[#0284C7] to-[#0F766E] border-cyan-400 animate-pulse shadow-cyan-500/30'
+                : 'bg-white border-[#CBD5E1] hover:border-[#14B8A6] shadow-md'
             }`}
           >
             {isSpeaking ? (
-              <Volume2 className="w-12 h-12 text-slate-950 animate-bounce" />
+              <Volume2 className="w-12 h-12 text-white animate-bounce" />
             ) : isListening ? (
-              <Mic className="w-12 h-12 text-slate-950 animate-pulse" />
+              <Mic className="w-12 h-12 text-white animate-pulse" />
             ) : isProcessing ? (
-              <Sparkles className="w-10 h-10 text-teal-300 animate-spin" />
+              <Sparkles className="w-10 h-10 text-white animate-spin" />
             ) : (
-              <Sparkles className="w-10 h-10 text-teal-400" />
+              <Sparkles className="w-10 h-10 text-[#14B8A6]" />
             )}
           </button>
         </div>
 
         {/* Live Transcription & Status */}
         <div className="space-y-3 px-4">
-          <p className="text-xs uppercase tracking-widest font-semibold text-slate-400">
+          <p className="text-xs uppercase tracking-widest font-semibold text-[#64748B]">
             {isSpeaking
               ? 'AI speaking · tap orb to interrupt'
               : isProcessing
@@ -524,11 +524,11 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({
           {/* Spoken transcript or AI reply */}
           <div className="min-h-[60px] flex items-center justify-center">
             {transcript ? (
-              <p className="text-lg font-medium text-teal-200 italic animate-pulse">
+              <p className="text-lg font-medium text-[#0D9488] italic animate-pulse">
                 "{transcript}"
               </p>
             ) : (
-              <p className="text-sm sm:text-base text-slate-300 max-w-md leading-relaxed">
+              <p className="text-sm sm:text-base text-[#0F172A] max-w-md leading-relaxed font-medium">
                 {lastAgentSpeech}
               </p>
             )}
@@ -536,8 +536,8 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({
         </div>
 
         {speechError && (
-          <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+          <div className="p-3 rounded-xl bg-[#FFE4E6] border border-[#FECDD3] text-[#E11D48] text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-[#E11D48] shrink-0" />
             <span>{speechError}</span>
           </div>
         )}
@@ -554,9 +554,9 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({
           className="rounded-full w-16 h-16 p-0 shadow-xl cursor-pointer"
           leftIcon={
             isListening ? (
-              <MicOff className="w-6 h-6 text-rose-200" />
+              <MicOff className="w-6 h-6 text-[#E11D48]" />
             ) : isSpeaking ? (
-              <Volume2 className="w-6 h-6 text-teal-300" />
+              <Volume2 className="w-6 h-6 text-[#0F172A]" />
             ) : (
               <Mic className="w-6 h-6 text-white" />
             )
@@ -567,7 +567,7 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({
           variant="outline"
           size="md"
           onClick={onClose}
-          className="rounded-xl px-5 text-xs text-slate-300 cursor-pointer"
+          className="rounded-xl px-5 text-xs text-[#475569] cursor-pointer"
         >
           Exit to Chat
         </Button>

@@ -32,6 +32,28 @@ async def start_conversation_node(state: CallState, db: AsyncSession) -> Dict[st
             "is_completed": False,
         }
 
+    # A completed handoff is historical. Clear its routing flags before handling
+    # a later message in the same chat so it cannot trigger duplicate alerts.
+    if (
+        (state.get("handoff_completed") or state.get("handoff_required"))
+        and not state.get("awaiting_handoff_contact")
+    ):
+        return {
+            "conversation_id": convo_id,
+            "handoff_required": False,
+            "handoff_reason": None,
+            "awaiting_handoff_contact": False,
+            "handoff_completed": False,
+            "frontdesk_alert_sent": False,
+            "patient_name": state.get("patient_name") if state.get("is_verified") else None,
+            "awaiting_identity_verification": False,
+            "is_new_patient": False,
+            "is_emergency": False,
+            "pending_intent": None,
+            "intent": None,
+            "is_completed": False,
+        }
+
     # If conversation is already active, preserve all existing state flags
     return {
         "conversation_id": convo_id,
