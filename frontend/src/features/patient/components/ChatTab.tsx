@@ -98,11 +98,11 @@ export const ChatTab: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2">
+          <h2 className="text-2xl font-bold text-[#0F172A] tracking-tight flex items-center gap-2">
             Clinic Assistant Chat
             <Badge variant="teal">Online</Badge>
           </h2>
-          <p className="text-xs sm:text-sm text-slate-400">
+          <p className="text-xs sm:text-sm text-[#475569]">
             Intelligent conversation engine powered by clinical decision graph
           </p>
         </div>
@@ -118,8 +118,8 @@ export const ChatTab: React.FC = () => {
 
       {/* Preset Suggestion Chips */}
       <div className="space-y-1.5">
-        <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-          <Sparkles className="w-3 h-3 text-teal-400" /> Instant Prompt Presets
+        <span className="text-[11px] font-semibold text-[#475569] uppercase tracking-wider flex items-center gap-1.5">
+          <Sparkles className="w-3 h-3 text-[#0D9488]" /> Instant Prompt Presets
         </span>
         <div className="flex flex-wrap gap-2">
           {PATIENT_PROMPT_PRESETS.map((preset, idx) => (
@@ -127,9 +127,9 @@ export const ChatTab: React.FC = () => {
               key={idx}
               type="button"
               onClick={() => handleSendMessage(preset.text)}
-              className="text-xs px-3 py-1.5 rounded-full bg-slate-900/90 text-slate-300 hover:text-white border border-slate-800 hover:border-teal-500/50 hover:bg-slate-800 transition-all text-left shadow-sm cursor-pointer"
+              className="text-xs px-3 py-1.5 rounded-full bg-[#F1F5F9] text-[#475569] hover:text-[#0F172A] border border-[#E2E8F0] hover:border-[#14B8A6] hover:bg-white transition-all text-left shadow-sm cursor-pointer"
             >
-              <span className="text-teal-400/80 mr-1.5 font-medium">{preset.category}:</span>
+              <span className="text-[#0D9488] mr-1.5 font-medium">{preset.category}:</span>
               {preset.text}
             </button>
           ))}
@@ -147,7 +147,7 @@ export const ChatTab: React.FC = () => {
               }`}
             >
               {msg.sender === 'assistant' && (
-                <div className="w-8 h-8 rounded-xl bg-teal-500/20 text-teal-300 flex items-center justify-center shrink-0 border border-teal-500/30 shadow-md">
+                <div className="w-8 h-8 rounded-xl bg-[#CCFBF1] text-[#0D9488] flex items-center justify-center shrink-0 border border-[#99F6E4] shadow-sm">
                   <Bot className="w-4.5 h-4.5" />
                 </div>
               )}
@@ -155,8 +155,8 @@ export const ChatTab: React.FC = () => {
               <div
                 className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
                   msg.sender === 'patient'
-                    ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white rounded-tr-none shadow-md'
-                    : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-none shadow-inner'
+                    ? 'bg-[#0F766E] text-white rounded-tr-none shadow-sm'
+                    : 'bg-white border border-[#E2E8F0] text-[#0F172A] rounded-tl-none shadow-[var(--shadow-card)]'
                 }`}
               >
                 <div className="flex items-center justify-between gap-4 mb-1 text-[11px] opacity-70">
@@ -169,10 +169,10 @@ export const ChatTab: React.FC = () => {
 
                 {/* Slot Details Card if returned */}
                 {msg.targetSlot && (
-                  <div className="mt-3 p-3 rounded-xl bg-slate-950/80 border border-teal-500/30 text-xs text-slate-300 space-y-1.5">
-                    <div className="flex items-center justify-between text-teal-300 font-semibold border-b border-slate-800 pb-1.5">
+                  <div className="mt-3 p-3 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] text-xs text-[#475569] space-y-1.5">
+                    <div className="flex items-center justify-between text-[#0F766E] font-semibold border-b border-[#E2E8F0] pb-1.5">
                       <span className="flex items-center gap-1.5">
-                        <Calendar className="w-3.5 h-3.5 text-teal-400" />
+                        <Calendar className="w-3.5 h-3.5 text-[#0D9488]" />
                         Scheduled Appointment Slot
                       </span>
                       {msg.isConfirmed && (
@@ -183,13 +183,13 @@ export const ChatTab: React.FC = () => {
                     </div>
                     {msg.targetSlot.doctor_name && (
                       <p className="flex items-center gap-1.5">
-                        <Stethoscope className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        <span>Doctor: <strong>{msg.targetSlot.doctor_name}</strong></span>
+                        <Stethoscope className="w-3.5 h-3.5 text-[#64748B] shrink-0" />
+                        <span>Doctor: <strong className="text-[#0F172A]">{msg.targetSlot.doctor_name}</strong></span>
                       </p>
                     )}
                     {msg.targetSlot.location && (
                       <p className="flex items-center gap-1.5">
-                        <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <MapPin className="w-3.5 h-3.5 text-[#64748B] shrink-0" />
                         <span>Branch: {msg.targetSlot.location}</span>
                       </p>
                     )}
@@ -197,7 +197,7 @@ export const ChatTab: React.FC = () => {
                 )}
 
                 {msg.isConfirmed && (
-                  <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-400 font-medium">
+                  <div className="mt-2 flex items-center gap-1.5 text-xs text-[#059669] font-medium">
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     <span>Appointment logged to clinical database.</span>
                   </div>
@@ -205,7 +205,7 @@ export const ChatTab: React.FC = () => {
               </div>
 
               {msg.sender === 'patient' && (
-                <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-300 flex items-center justify-center shrink-0 border border-emerald-500/30 shadow-md">
+                <div className="w-8 h-8 rounded-xl bg-[#CCFBF1] text-[#0F766E] flex items-center justify-center shrink-0 border border-[#99F6E4] shadow-sm">
                   <User className="w-4.5 h-4.5" />
                 </div>
               )}
@@ -214,14 +214,14 @@ export const ChatTab: React.FC = () => {
 
           {chatMutation.isPending && (
             <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-xl bg-teal-500/20 text-teal-300 flex items-center justify-center shrink-0 border border-teal-500/30 animate-pulse">
+              <div className="w-8 h-8 rounded-xl bg-[#CCFBF1] text-[#0D9488] flex items-center justify-center shrink-0 border border-[#99F6E4] animate-pulse">
                 <Bot className="w-4.5 h-4.5" />
               </div>
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl rounded-tl-none px-4 py-3 text-sm text-teal-300 flex items-center gap-2 shadow-inner">
-                <span className="w-2 h-2 rounded-full bg-teal-400 animate-bounce" />
-                <span className="w-2 h-2 rounded-full bg-teal-400 animate-bounce [animation-delay:0.2s]" />
-                <span className="w-2 h-2 rounded-full bg-teal-400 animate-bounce [animation-delay:0.4s]" />
-                <span className="text-xs text-slate-400 ml-1">Analyzing symptoms & doctor availability...</span>
+              <div className="bg-white border border-[#E2E8F0] rounded-2xl rounded-tl-none px-4 py-3 text-sm text-[#0D9488] flex items-center gap-2 shadow-[var(--shadow-card)]">
+                <span className="w-2 h-2 rounded-full bg-[#14B8A6] animate-bounce" />
+                <span className="w-2 h-2 rounded-full bg-[#14B8A6] animate-bounce [animation-delay:0.2s]" />
+                <span className="w-2 h-2 rounded-full bg-[#14B8A6] animate-bounce [animation-delay:0.4s]" />
+                <span className="text-xs text-[#64748B] ml-1">Analyzing symptoms & doctor availability...</span>
               </div>
             </div>
           )}
@@ -229,26 +229,26 @@ export const ChatTab: React.FC = () => {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Patient Profile / Contact Info (Optional for Registration) */}
-        <div className="flex flex-wrap items-center gap-3 px-1 pt-2 border-t border-slate-800/80 text-xs text-slate-400">
+        {/* Patient Profile / Contact Info */}
+        <div className="flex flex-wrap items-center gap-3 px-1 pt-2 border-t border-[#E2E8F0] text-xs text-[#475569]">
           <div className="flex items-center gap-1.5 min-w-[170px] flex-1">
-            <User className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+            <User className="w-3.5 h-3.5 text-[#14B8A6] shrink-0" />
             <input
               type="text"
               value={patientName}
               onChange={(e) => setPatientName(e.target.value)}
               placeholder="Your Full Name (optional)"
-              className="w-full bg-slate-900 border border-slate-800 focus:border-teal-400 rounded-lg px-2.5 py-1 text-xs text-slate-200 outline-none"
+              className="w-full bg-[#F8FAFC] border border-[#E2E8F0] focus:border-[#14B8A6] rounded-lg px-2.5 py-1 text-xs text-[#0F172A] placeholder-[#64748B] outline-none"
             />
           </div>
           <div className="flex items-center gap-1.5 min-w-[170px] flex-1">
-            <Mail className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+            <Mail className="w-3.5 h-3.5 text-[#14B8A6] shrink-0" />
             <input
               type="email"
               value={patientEmail}
               onChange={(e) => setPatientEmail(e.target.value)}
               placeholder="Email for confirmation receipt"
-              className="w-full bg-slate-900 border border-slate-800 focus:border-teal-400 rounded-lg px-2.5 py-1 text-xs text-slate-200 outline-none"
+              className="w-full bg-[#F8FAFC] border border-[#E2E8F0] focus:border-[#14B8A6] rounded-lg px-2.5 py-1 text-xs text-[#0F172A] placeholder-[#64748B] outline-none"
             />
           </div>
         </div>
@@ -261,7 +261,7 @@ export const ChatTab: React.FC = () => {
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Type your symptoms, preferred doctor, or requested time (Press Enter to send)..."
-            className="flex-1 bg-slate-900/90 text-slate-100 placeholder-slate-500 text-sm rounded-xl border border-slate-700/80 px-4 py-3 outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-400/20 resize-none shadow-inner"
+            className="flex-1 bg-[#F8FAFC] text-[#0F172A] placeholder-[#64748B] text-sm rounded-xl border border-[#CBD5E1] px-4 py-3 outline-none focus:border-[#14B8A6] focus:ring-2 focus:ring-[#14B8A6]/20 resize-none shadow-sm"
           />
           <Button
             type="button"

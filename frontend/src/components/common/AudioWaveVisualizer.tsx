@@ -19,8 +19,8 @@ export const AudioWaveVisualizer: React.FC<AudioWaveVisualizerProps> = ({
   return (
     <div
       className={cn(
-        'flex items-center justify-center gap-1.5 h-16 px-6 py-2 rounded-2xl bg-slate-950/60 border border-slate-800/80 transition-all duration-300',
-        isActive && 'border-teal-500/40 shadow-lg shadow-teal-500/10',
+        'flex items-center justify-center gap-1.5 h-16 px-6 py-2 rounded-2xl bg-[#F1F5F9] border border-[#E2E8F0] transition-all duration-300',
+        isActive && 'border-[#14B8A6] shadow-sm',
         className
       )}
     >
@@ -36,9 +36,9 @@ export const AudioWaveVisualizer: React.FC<AudioWaveVisualizerProps> = ({
               'w-1 rounded-full transition-all duration-200',
               isActive
                 ? isSpeaking
-                  ? 'bg-gradient-to-t from-teal-400 to-cyan-300'
-                  : 'bg-gradient-to-t from-emerald-400 to-teal-300'
-                : 'bg-slate-700/60 h-2'
+                  ? 'bg-gradient-to-t from-[#14B8A6] to-[#0D9488]'
+                  : 'bg-gradient-to-t from-[#059669] to-[#14B8A6]'
+                : 'bg-[#CBD5E1] h-2'
             )}
             style={{
               height: isActive ? `${Math.max(8, 36 * randomHeightMultiplier)}px` : '4px',

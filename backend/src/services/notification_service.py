@@ -146,7 +146,7 @@ class NotificationService:
         return subject, body
 
     @staticmethod
-    def _send_smtp_email(to_email: str, subject: str, body: str) -> dict:
+    def _send_smtp_email(to_email: str, subject: str, body: str, timeout_seconds: int = 20) -> dict:
         message = EmailMessage()
         message["From"] = settings.SMTP_FROM_EMAIL
         message["To"] = to_email
@@ -154,11 +154,11 @@ class NotificationService:
         message.set_content(body)
 
         if settings.SMTP_PORT == 465:
-            with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=20) as server:
+            with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=timeout_seconds) as server:
                 server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
                 server.send_message(message)
         else:
-            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=20) as server:
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=timeout_seconds) as server:
                 server.ehlo()
                 if settings.SMTP_USE_TLS:
                     server.starttls()
@@ -173,9 +173,48 @@ class NotificationService:
         *,
         reason: str,
         call_details: dict,
-    ) -> None:
-        """Send alert email to clinic staff when a handoff or escalation occurs."""
-        logger.info(
-            f"ALERT: Front Desk escalation for call {call_details.get('call_sid')} - Reason: {reason}. "
-            f"Alerting {settings.FRONT_DESK_EMAIL}"
+    ) -> bool:
+        """Email front desk a callback-ready escalation; never include DOB."""
+        recipient = (settings.FRONT_DESK_EMAIL or "").strip()
+        if not recipient:
+            logger.warning("Front desk escalation was queued without email: FRONT_DESK_EMAIL is not configured")
+            return False
+        if not all((settings.SMTP_HOST, settings.SMTP_USERNAME, settings.SMTP_PASSWORD, settings.SMTP_FROM_EMAIL)):
+            logger.warning("Front desk escalation email is not configured: SMTP settings are incomplete")
+            return False
+
+        contact_phone = call_details.get("patient_phone") or "Not provided"
+        contact_email = call_details.get("patient_email") or "Not provided"
+        identity_status = "Verified" if call_details.get("identity_verified") else "Unverified"
+        subject = f"Patient follow-up requested — {settings.CLINIC_NAME}"
+        body = (
+            "A patient conversation needs front-desk follow-up.\n\n"
+            f"Reason: {reason}\n"
+            f"Channel: {call_details.get('channel') or 'Unknown'}\n"
+            f"Patient name: {call_details.get('patient_name') or 'Not provided'} ({identity_status})\n"
+            f"Callback phone: {contact_phone}\n"
+            f"Callback email: {contact_email}\n"
+            f"Conversation ID: {call_details.get('conversation_id') or 'Not available'}\n"
+            f"Call ID: {call_details.get('call_sid') or 'Not available'}\n\n"
+            "Open the front-desk dashboard to review the conversation transcript."
         )
+        try:
+            result = await asyncio.to_thread(
+                self._send_smtp_email,
+                recipient,
+                subject,
+                body,
+                5,
+            )
+            logger.info(
+                "Front desk escalation email sent to %s for conversation %s",
+                recipient,
+                call_details.get("conversation_id"),
+            )
+            return result.get("status") == "sent"
+        except Exception:
+            logger.exception(
+                "Failed to email front desk escalation for conversation %s",
+                call_details.get("conversation_id"),
+            )
+            return False

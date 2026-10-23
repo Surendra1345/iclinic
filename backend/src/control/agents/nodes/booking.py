@@ -11,12 +11,13 @@ from src.control.agents.tools.booking_tools import check_patient_active_appointm
 from src.control.agents.tools.slot_tools import (
     get_slots_by_specialty_and_location, get_branch_doctors_info,
     get_specialties_for_branch, get_branches_for_specialty, get_slots_by_date_and_criteria,
-    parse_date_query_to_range, release_slot, reserve_slot,
+    parse_date_query_to_range, has_date_reference, release_slot, reserve_slot,
 )
 from src.config.settings import settings
 from src.control.agents.tools.appointment_time import CLINIC_TIMEZONE
 from src.control.agents.tools.registration_tools import is_closing_or_thanks
 from src.data.repositories.conversation_repository import ConversationRepository
+from src.data.repositories.slot_repository import SlotUnavailableError
 from src.control.agents.nodes.booking_helpers import (
     _clean_loc, _clean_slot_time, _extract_name_and_email, _extract_time_of_day,
     _extract_time_window, _format_slot_time_str, _match_branch, _match_doctor,
@@ -26,6 +27,55 @@ from src.control.agents.nodes._booking_held_slot import handle_held_slot
 from src.control.agents.nodes._booking_discovery import discover_booking_slots
 
 logger = logging.getLogger(__name__)
+
+
+async def _recover_from_slot_conflict(state, db, *, requested_date=None):
+    """Refresh availability after another patient takes the selected slot."""
+    selected = state.get("target_slot_details") or {}
+    doctor = selected.get("doctor_name") or state.get("preferred_doctor")
+    location = selected.get("location_name") or state.get("preferred_location")
+    specialty = selected.get("specialty") or state.get("preferred_specialty")
+    date_query = requested_date.isoformat() if requested_date else None
+
+    selected_start = selected.get("start_time")
+    if not date_query and selected_start:
+        try:
+            selected_dt = datetime.fromisoformat(selected_start)
+            if selected_dt.tzinfo is None:
+                selected_dt = selected_dt.replace(tzinfo=timezone.utc)
+            date_query = selected_dt.astimezone(CLINIC_TIMEZONE).date().isoformat()
+        except (TypeError, ValueError):
+            date_query = None
+
+    criteria = {"doctor_name": doctor, "location_name": location, "specialty": specialty}
+    alternatives = await get_slots_by_date_and_criteria(
+        db, date_query=date_query, limit=50, **criteria,
+    ) if date_query else []
+    if not alternatives:
+        alternatives = await get_slots_by_date_and_criteria(db, limit=50, **criteria)
+
+    response = {
+        "target_slot_id": None,
+        "target_slot_details": None,
+        "offered_slots": alternatives[:6],
+        "awaiting_preferred_date": True,
+        "preferred_doctor": doctor,
+        "preferred_location": location,
+        "preferred_specialty": specialty,
+    }
+    if alternatives:
+        choices = "; ".join(slot["formatted_speech"] for slot in alternatives[:3])
+        response["latest_agent_speech"] = (
+            "That slot was just taken by another patient. Here are the next available options: "
+            f"{choices}. Which one would you like? I will hold it after you choose."
+        )
+    else:
+        response["offered_slots"] = []
+        response["latest_agent_speech"] = (
+            "That slot was just taken by another patient, and I couldn't find another opening with those "
+            "preferences. What other date, doctor, or branch would work for you?"
+        )
+    return response
 
 async def booking_agent_node(state: CallState, db: AsyncSession) -> Dict[str, Any]:
     user_speech = state.get("latest_user_speech", "").strip()
@@ -39,6 +89,53 @@ async def booking_agent_node(state: CallState, db: AsyncSession) -> Dict[str, An
     requested_window = _extract_time_window(user_speech)
     parsed_date_start, parsed_date_end = parse_date_query_to_range(user_speech)
     has_date_in_speech = parsed_date_start is not None
+
+    if has_date_reference(user_speech) and not has_date_in_speech:
+        return {
+            "awaiting_preferred_date": True,
+            "latest_agent_speech": (
+                "I couldn't understand that date. Please give me a valid date, such as October 27, "
+                "so I can check the correct day."
+            ),
+        }
+
+    # Date ranges are returned in UTC. Keep the conversational date in the
+    # clinic timezone so a date such as Oct 27 is not displayed as Oct 26.
+    if parsed_date_start is not None:
+        parsed_date_start = parsed_date_start.astimezone(CLINIC_TIMEZONE).date()
+
+    # When the patient is choosing from listed slot times, a bare number such
+    # as "10" can mean 10:00, but it can also be a day of the month. Treat it
+    # as a time only when exactly one offered slot matches; otherwise ask.
+    bare_number = re.fullmatch(r"\s*(?:at\s+)?(\d{1,2})\s*", user_speech, re.IGNORECASE)
+    if (
+        bare_number
+        and state.get("awaiting_preferred_date")
+        and state.get("offered_slots")
+        and requested_time is None
+        and requested_window is None
+    ):
+        bare_hour = int(bare_number.group(1))
+        if 1 <= bare_hour <= 12:
+            matches = []
+            for slot in state.get("offered_slots") or []:
+                slot_dt = datetime.fromisoformat(slot["start_time"])
+                if slot_dt.tzinfo is None:
+                    slot_dt = slot_dt.replace(tzinfo=timezone.utc)
+                local_dt = slot_dt.astimezone(CLINIC_TIMEZONE)
+                if local_dt.hour == bare_hour and local_dt.minute == 0:
+                    matches.append(slot)
+            if len(matches) == 1:
+                requested_time = (bare_hour, 0)
+                has_date_in_speech = False
+                parsed_date_start = None
+            else:
+                return {
+                    "latest_agent_speech": (
+                        f"When you say {bare_hour}, do you mean {bare_hour}:00 AM or PM, "
+                        "or the day of the month? Please include AM or PM for a time."
+                    ),
+                }
     alternative_date = None
 
     # Extract name and email if present anywhere in user_speech
@@ -60,8 +157,8 @@ async def booking_agent_node(state: CallState, db: AsyncSession) -> Dict[str, An
             pass
 
     logger.info(
-        "Booking turn: speech=%r target_slot_id=%s doc=%s specialty=%s location=%s awaiting_date=%s awaiting_email=%s",
-        user_speech,
+        "Booking turn: speech_len=%d target_slot_id=%s doc=%s specialty=%s location=%s awaiting_date=%s awaiting_email=%s",
+        len(user_speech),
         target_slot_id,
         state.get("preferred_doctor"),
         state.get("preferred_specialty"),
@@ -303,6 +400,7 @@ async def booking_agent_node(state: CallState, db: AsyncSession) -> Dict[str, An
                 patient_name=effective_name,
                 patient_email=effective_email if not user_wants_skip else None,
                 convo_id=convo_id,
+                appointment_type_name=state.get("preferred_appointment_type"),
                 repo=repo,
                 db=db,
             )
@@ -332,19 +430,23 @@ async def booking_agent_node(state: CallState, db: AsyncSession) -> Dict[str, An
         target_slot_id = None
         target_slot = None
 
-    held_result = await handle_held_slot(
-        state=state, db=db, user_speech=user_speech, lower_speech=lower_speech,
-        target_slot=target_slot, target_slot_id=target_slot_id,
-        requested_time=requested_time, requested_window=requested_window,
-        has_date_in_speech=has_date_in_speech, patient_id=patient_id,
-        patient_name=patient_name, patient_email=patient_email, convo_id=convo_id, repo=repo,
-    )
-    if held_result is not None:
-        return held_result
+    try:
+        held_result = await handle_held_slot(
+            state=state, db=db, user_speech=user_speech, lower_speech=lower_speech,
+            target_slot=target_slot, target_slot_id=target_slot_id,
+            requested_time=requested_time, requested_window=requested_window,
+            has_date_in_speech=has_date_in_speech, patient_id=patient_id,
+            patient_name=patient_name, patient_email=patient_email, convo_id=convo_id, repo=repo,
+        )
+        if held_result is not None:
+            return held_result
 
-    return await discover_booking_slots(
-        state=state, db=db, user_speech=user_speech, lower_speech=lower_speech,
-        requested_time=requested_time, requested_window=requested_window,
-        has_date_in_speech=has_date_in_speech, parsed_date_start=parsed_date_start,
-        alternative_date=alternative_date,
-    )
+        return await discover_booking_slots(
+            state=state, db=db, user_speech=user_speech, lower_speech=lower_speech,
+            requested_time=requested_time, requested_window=requested_window,
+            has_date_in_speech=has_date_in_speech, parsed_date_start=parsed_date_start,
+            alternative_date=alternative_date,
+        )
+    except SlotUnavailableError:
+        logger.info("Selected booking slot became unavailable; refreshing options for conversation=%s", convo_id)
+        return await _recover_from_slot_conflict(state, db, requested_date=parsed_date_start)

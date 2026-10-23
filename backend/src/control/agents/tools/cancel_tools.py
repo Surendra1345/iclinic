@@ -1,6 +1,7 @@
 """Cancel tools for atomic appointment cancellation."""
 import uuid
 from typing import Any, Dict, Optional
+# pyrefly: ignore[missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.services.appointment_service import AppointmentService

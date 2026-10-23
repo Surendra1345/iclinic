@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { frontdeskService } from '../services/frontdeskService'
 
 export const useDashboardStats = () => {
@@ -34,5 +34,30 @@ export const useClinicLocations = () => {
     queryKey: ['dashboard', 'locations'],
     queryFn: () => frontdeskService.getLocations(),
     staleTime: 1000 * 60, // 1 minute
+  })
+}
+
+export const useForwardedRequests = (filters: { status?: string; search?: string }) => {
+  return useQuery({
+    queryKey: ['dashboard', 'forwarded_requests', filters],
+    queryFn: () => frontdeskService.getForwardedRequests(filters),
+    refetchInterval: 4000, // fast live sync for escalations
+  })
+}
+
+export const useUpdateForwardedRequest = () => {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      id,
+      data,
+    }: {
+      id: string
+      data: { status: 'pending' | 'contacted' | 'resolved'; notes?: string }
+    }) => frontdeskService.updateForwardedRequest(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dashboard', 'forwarded_requests'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard', 'stats'] })
+    },
   })
 }

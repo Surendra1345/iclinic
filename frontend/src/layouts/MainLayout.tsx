@@ -8,7 +8,7 @@ export const MainLayout: React.FC = () => {
   const [currentView, setCurrentView] = useState<MainViewType>('patient')
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#070b14] text-slate-100 selection:bg-teal-500/30 selection:text-teal-200">
+    <div className="min-h-screen flex flex-col bg-[#F6F9FB] text-[#0F172A] selection:bg-[#CCFBF1] selection:text-[#0F766E]">
       <Navbar currentView={currentView} onViewChange={setCurrentView} />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">

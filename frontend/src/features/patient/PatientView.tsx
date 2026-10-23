@@ -37,7 +37,7 @@ export const PatientView: React.FC = () => {
     <div className="space-y-8 animate-fadeIn">
       {/* Subtab Selector Navigation */}
       <div className="flex justify-center">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 p-1.5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl max-w-2xl w-full">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 p-1.5 rounded-2xl bg-[#F1F5F9] border border-[#E2E8F0] shadow-sm max-w-2xl w-full">
           {tabs.map((tab) => {
             const isActive = activeTab === tab.id
             return (
@@ -47,17 +47,17 @@ export const PatientView: React.FC = () => {
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex flex-col items-center justify-center p-3 rounded-xl transition-all duration-200 cursor-pointer ${
                   isActive
-                    ? 'bg-gradient-to-r from-teal-500/20 to-emerald-500/20 border border-teal-500/40 text-white shadow-lg shadow-teal-500/10'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent'
+                    ? 'bg-[#F0FDFA] border border-[#14B8A6]/50 text-[#0F766E] shadow-sm'
+                    : 'text-[#475569] hover:text-[#0F172A] hover:bg-white/60 border border-transparent'
                 }`}
               >
                 <div className="flex items-center gap-2 font-semibold text-xs sm:text-sm">
-                  <span className={isActive ? 'text-teal-400' : 'text-slate-400'}>
+                  <span className={isActive ? 'text-[#0D9488]' : 'text-[#64748B]'}>
                     {tab.icon}
                   </span>
                   <span>{tab.label}</span>
                 </div>
-                <span className="text-[10px] text-slate-400 mt-0.5 hidden sm:block">
+                <span className="text-[10px] text-[#64748B] mt-0.5 hidden sm:block">
                   {tab.description}
                 </span>
               </button>

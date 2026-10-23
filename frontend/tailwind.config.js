@@ -8,25 +8,74 @@ export default {
   theme: {
     extend: {
       colors: {
-        clinic: {
-          50: '#f0fdfa',
-          100: '#ccfbf1',
-          200: '#99f6e4',
-          300: '#5eead4',
-          400: '#2dd4bf',
-          500: '#14b8a6',
-          600: '#0d9488',
-          700: '#0f766e',
-          800: '#115e59',
-          900: '#134e4a',
-          950: '#042f2e',
+        primary: {
+          50: '#F0FDFA',
+          100: '#CCFBF1',
+          200: '#99F6E4',
+          300: '#5EEAD4',
+          400: '#2DD4BF',
+          500: '#14B8A6',
+          600: '#0D9488',
+          700: '#0F766E',
+          800: '#115E59',
+          900: '#134E4A',
+          950: '#042F2E',
         },
-        navy: {
-          800: '#0f172a',
-          850: '#0b1120',
-          900: '#070b14',
-          950: '#030712',
-        }
+        clinic: {
+          50: '#F0FDFA',
+          100: '#CCFBF1',
+          200: '#99F6E4',
+          300: '#5EEAD4',
+          400: '#2DD4BF',
+          500: '#14B8A6',
+          600: '#0D9488',
+          700: '#0F766E',
+          800: '#115E59',
+          900: '#134E4A',
+          950: '#042F2E',
+        },
+        surface: {
+          base: '#F6F9FB',
+          card: '#FFFFFF',
+          subtle: '#F1F5F9',
+        },
+        border: {
+          subtle: '#E2E8F0',
+          strong: '#CBD5E1',
+        },
+        txt: {
+          primary: '#0F172A',
+          secondary: '#475569',
+          muted: '#64748B',
+        },
+        status: {
+          booked: '#059669',
+          'booked-bg': '#D1FAE5',
+          'booked-border': '#A7F3D0',
+          rescheduled: '#B45309',
+          'rescheduled-bg': '#FEF3C7',
+          'rescheduled-border': '#FDE68A',
+          cancelled: '#E11D48',
+          'cancelled-bg': '#FFE4E6',
+          'cancelled-border': '#FECDD3',
+          escalated: '#EA580C',
+          'escalated-bg': '#FFEDD5',
+          'escalated-border': '#FED7AA',
+          info: '#0284C7',
+          'info-bg': '#E0F2FE',
+          'info-border': '#BAE6FD',
+        },
+        channel: {
+          chat: '#0D9488',
+          'chat-bg': '#CCFBF1',
+          voice: '#6366F1',
+          'voice-bg': '#E0E7FF',
+          call: '#0284C7',
+          'call-bg': '#E0F2FE',
+        },
+      },
+      boxShadow: {
+        card: '0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 12px rgba(15, 23, 42, 0.05)',
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
@@ -45,3 +94,4 @@ export default {
   },
   plugins: [],
 }
+

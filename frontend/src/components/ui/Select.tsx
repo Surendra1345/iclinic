@@ -19,7 +19,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
     return (
       <div className="w-full space-y-1.5 text-left">
         {label && (
-          <label htmlFor={selectId} className="block text-xs font-medium text-slate-300">
+          <label htmlFor={selectId} className="block text-xs font-semibold text-[#475569]">
             {label}
           </label>
         )}
@@ -27,8 +27,8 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
           id={selectId}
           ref={ref}
           className={cn(
-            'w-full bg-slate-900/90 text-slate-100 text-sm rounded-xl border border-slate-700/80 px-3.5 py-2.5 transition-all duration-200 outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-400/20 cursor-pointer shadow-inner',
-            error && 'border-rose-500/80 focus:border-rose-500',
+            'w-full bg-white text-[#0F172A] text-sm rounded-xl border border-[#E2E8F0] hover:border-[#CBD5E1] px-3.5 py-2.5 transition-all duration-200 outline-none focus:border-[#14B8A6] focus:ring-2 focus:ring-[#14B8A6]/20 cursor-pointer shadow-xs',
+            error && 'border-[#E11D48] focus:border-[#E11D48]',
             className
           )}
           {...props}
@@ -37,13 +37,13 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
             const val = opt.id ?? opt.value ?? ''
             const lab = opt.label ?? opt.name ?? val
             return (
-              <option key={idx} value={val} className="bg-slate-900 text-slate-100 py-1">
+              <option key={idx} value={val} className="bg-white text-[#0F172A] py-1">
                 {lab}
               </option>
             )
           })}
         </select>
-        {error && <p className="text-xs text-rose-400 font-medium pl-1">{error}</p>}
+        {error && <p className="text-xs text-[#E11D48] font-medium pl-1">{error}</p>}
       </div>
     )
   }

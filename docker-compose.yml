@@ -24,7 +24,7 @@ services:
     container_name: iclinic-backend
     restart: unless-stopped
     env_file:
-      - ./backend/.env
+      - ./.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -35,6 +35,7 @@ services:
       - "8000:8000"
     volumes:
       - ./backend/src:/app/src
+      - audio_data:/app/audio_cache
 
   frontend:
     build:
@@ -49,3 +50,4 @@ services:
 
 volumes:
   postgres_data:
+  audio_data:

@@ -12,17 +12,17 @@ export const Card: React.FC<CardProps> = ({
   ...props
 }) => {
   const glowStyles = {
-    none: 'border-slate-800/80 hover:border-slate-700/80',
-    teal: 'border-teal-500/30 hover:border-teal-400/50 shadow-lg shadow-teal-500/5',
-    emerald: 'border-emerald-500/30 hover:border-emerald-400/50 shadow-lg shadow-emerald-500/5',
-    rose: 'border-rose-500/30 hover:border-rose-400/50 shadow-lg shadow-rose-500/5',
-    amber: 'border-amber-500/30 hover:border-amber-400/50 shadow-lg shadow-amber-500/5',
+    none: 'border-[#E2E8F0] hover:border-[#CBD5E1]',
+    teal: 'border-[#CCFBF1] hover:border-[#14B8A6]',
+    emerald: 'border-[#A7F3D0] hover:border-[#059669]',
+    rose: 'border-[#FECDD3] hover:border-[#E11D48]',
+    amber: 'border-[#FDE68A] hover:border-[#B45309]',
   }
 
   return (
     <div
       className={cn(
-        'glass-panel rounded-2xl p-6 transition-all duration-300 relative overflow-hidden',
+        'bg-white rounded-2xl p-6 transition-all duration-200 relative overflow-hidden border shadow-[var(--shadow-card)] text-[#0F172A]',
         glowStyles[glow],
         className
       )}
@@ -32,3 +32,4 @@ export const Card: React.FC<CardProps> = ({
     </div>
   )
 }
+

@@ -16,13 +16,13 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
     return (
       <div className="w-full space-y-1.5 text-left">
         {label && (
-          <label htmlFor={inputId} className="block text-xs font-medium text-slate-300">
+          <label htmlFor={inputId} className="block text-xs font-semibold text-[#475569]">
             {label}
           </label>
         )}
         <div className="relative flex items-center">
           {leftIcon && (
-            <div className="absolute left-3.5 flex items-center pointer-events-none text-slate-400">
+            <div className="absolute left-3.5 flex items-center pointer-events-none text-[#64748B]">
               {leftIcon}
             </div>
           )}
@@ -30,10 +30,10 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             id={inputId}
             ref={ref}
             className={cn(
-              'w-full bg-slate-900/80 text-slate-100 placeholder-slate-500 text-sm rounded-xl border border-slate-700/80 px-4 py-2.5 transition-all duration-200 outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-400/20 shadow-inner',
+              'w-full bg-white text-[#0F172A] placeholder-[#64748B] text-sm rounded-xl border border-[#E2E8F0] hover:border-[#CBD5E1] px-4 py-2.5 transition-all duration-200 outline-none focus:border-[#14B8A6] focus:ring-2 focus:ring-[#14B8A6]/20 shadow-xs',
               leftIcon && 'pl-10',
               rightElement && 'pr-12',
-              error && 'border-rose-500/80 focus:border-rose-500 focus:ring-rose-500/20',
+              error && 'border-[#E11D48] focus:border-[#E11D48] focus:ring-[#E11D48]/20',
               className
             )}
             {...props}
@@ -45,9 +45,9 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           )}
         </div>
         {error ? (
-          <p className="text-xs text-rose-400 font-medium pl-1">{error}</p>
+          <p className="text-xs text-[#E11D48] font-medium pl-1">{error}</p>
         ) : helperText ? (
-          <p className="text-xs text-slate-400 pl-1">{helperText}</p>
+          <p className="text-xs text-[#64748B] pl-1">{helperText}</p>
         ) : null}
       </div>
     )

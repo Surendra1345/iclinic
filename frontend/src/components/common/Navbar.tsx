@@ -16,16 +16,16 @@ interface NavbarProps {
 
 export const Navbar: React.FC<NavbarProps> = ({ currentView, onViewChange }) => {
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-xl">
+    <header className="sticky top-0 z-50 w-full border-b border-[#E2E8F0] bg-white/95 backdrop-blur-md shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
         {/* Brand Logo & Name */}
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-teal-500 to-emerald-400 flex items-center justify-center text-slate-950 shadow-lg shadow-teal-500/20 font-bold">
-            <Stethoscope className="w-5 h-5 text-slate-950" />
+          <div className="w-10 h-10 rounded-xl bg-[#14B8A6] flex items-center justify-center text-white shadow-sm font-bold">
+            <Stethoscope className="w-5 h-5 text-white" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-bold text-white text-base sm:text-lg tracking-tight">
+              <span className="font-bold text-[#0F172A] text-base sm:text-lg tracking-tight">
                 {ENV.CLINIC_NAME}
               </span>
               <span className="hidden sm:inline-block">
@@ -34,21 +34,21 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onViewChange }) => 
                 </Badge>
               </span>
             </div>
-            <p className="text-[11px] text-slate-400 hidden sm:block">
+            <p className="text-[11px] text-[#64748B] hidden sm:block">
               Intelligent Multi-Branch Appointment Scheduling
             </p>
           </div>
         </div>
 
         {/* View Switcher: Patient Portal vs Frontdesk Dashboard */}
-        <div className="flex items-center gap-2 p-1 rounded-xl bg-slate-900 border border-slate-800">
+        <div className="flex items-center gap-1.5 p-1 rounded-xl bg-[#F1F5F9] border border-[#E2E8F0]">
           <button
             type="button"
             onClick={() => onViewChange('patient')}
             className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 cursor-pointer ${
               currentView === 'patient'
-                ? 'bg-gradient-to-r from-teal-500 to-emerald-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                ? 'bg-[#0F766E] text-white shadow-sm'
+                : 'text-[#475569] hover:text-[#0F172A] hover:bg-white'
             }`}
           >
             <PhoneCall className="w-3.5 h-3.5" />
@@ -60,8 +60,8 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onViewChange }) => 
             onClick={() => onViewChange('frontdesk')}
             className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 cursor-pointer ${
               currentView === 'frontdesk'
-                ? 'bg-gradient-to-r from-teal-500 to-emerald-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                ? 'bg-[#0F766E] text-white shadow-sm'
+                : 'text-[#475569] hover:text-[#0F172A] hover:bg-white'
             }`}
           >
             <LayoutDashboard className="w-3.5 h-3.5" />
@@ -71,8 +71,8 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onViewChange }) => 
 
         {/* Live System Indicator */}
         <div className="hidden lg:flex items-center gap-2.5">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#D1FAE5] border border-[#A7F3D0] text-[#059669] text-xs font-medium">
+            <span className="w-2 h-2 rounded-full bg-[#059669] animate-pulse" />
             <span>AI Voice Gateway Active</span>
           </div>
         </div>

@@ -101,42 +101,42 @@ export const ChatGPTStylePatientView: React.FC = () => {
 
 
   return (
-    <div className="flex flex-col h-screen bg-[#090d16] text-slate-100 selection:bg-teal-500/30 selection:text-teal-200">
+    <div className="flex flex-col h-screen bg-[#F6F9FB] text-[#0F172A] selection:bg-[#CCFBF1] selection:text-[#0F766E]">
       {/* Top ChatGPT / Gemini style Header Bar */}
-      <header className="h-14 border-b border-slate-800/80 bg-slate-950/70 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between shrink-0 z-20">
+      <header className="h-14 border-b border-[#E2E8F0] bg-white/90 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between shrink-0 z-20">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-teal-500 to-emerald-400 flex items-center justify-center text-slate-950 font-bold shadow-md shadow-teal-500/20">
-            <Stethoscope className="w-4 h-4 text-slate-950" />
+          <div className="w-8 h-8 rounded-lg bg-[#14B8A6] flex items-center justify-center text-white font-bold shadow-sm">
+            <Stethoscope className="w-4 h-4 text-white" />
           </div>
-          <span className="font-semibold text-white tracking-tight text-sm sm:text-base">
+          <span className="font-semibold text-[#0F172A] tracking-tight text-sm sm:text-base">
             {ENV.CLINIC_NAME}
           </span>
 
           {/* Quick Mode Tags (Chat, Voice, Call) */}
-          <div className="hidden sm:flex items-center gap-1.5 ml-4 pl-4 border-l border-slate-800">
+          <div className="hidden sm:flex items-center gap-2 ml-4 pl-4 border-l border-[#E2E8F0]">
             <button
               type="button"
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-teal-500/10 text-teal-300 border border-teal-500/30"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-[#CCFBF1] text-[#0D9488] border border-[#99F6E4]"
             >
-              <Sparkles className="w-3 h-3 text-teal-400" />
+              <Sparkles className="w-3 h-3 text-[#0D9488]" />
               <span>Chat</span>
             </button>
 
             <button
               type="button"
               onClick={() => setIsVoiceOverlayOpen(true)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-800 transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-[#E0E7FF] text-[#6366F1] hover:bg-[#EEF2FF] border border-[#C7D2FE] transition-colors cursor-pointer"
             >
-              <Mic className="w-3 h-3 text-emerald-400" />
+              <Mic className="w-3 h-3 text-[#6366F1]" />
               <span>Voice</span>
             </button>
 
             <button
               type="button"
               onClick={() => setIsCallModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-800 transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-[#E0F2FE] text-[#0284C7] hover:bg-[#F0F9FF] border border-[#BAE6FD] transition-colors cursor-pointer"
             >
-              <PhoneCall className="w-3 h-3 text-cyan-400" />
+              <PhoneCall className="w-3 h-3 text-[#0284C7]" />
               <span>Call</span>
             </button>
           </div>
@@ -147,7 +147,7 @@ export const ChatGPTStylePatientView: React.FC = () => {
             <button
               type="button"
               onClick={startNewChat}
-              className="text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-slate-800/80 transition-colors cursor-pointer"
+              className="text-xs text-[#475569] hover:text-[#0F172A] flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-[#F1F5F9] transition-colors cursor-pointer"
               title="New Chat"
             >
               <RotateCcw className="w-3.5 h-3.5" />
@@ -157,9 +157,9 @@ export const ChatGPTStylePatientView: React.FC = () => {
 
           <Link
             to="/frontdesk"
-            className="flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-teal-300 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-teal-500/30 transition-all shadow-sm"
+            className="flex items-center gap-1.5 text-xs font-medium text-[#475569] hover:text-[#0F766E] px-3 py-1.5 rounded-lg bg-white border border-[#E2E8F0] hover:border-[#14B8A6] transition-all shadow-sm"
           >
-            <LayoutDashboard className="w-3.5 h-3.5" />
+            <LayoutDashboard className="w-3.5 h-3.5 text-[#14B8A6]" />
             <span>Frontdesk Console</span>
           </Link>
         </div>
@@ -168,22 +168,20 @@ export const ChatGPTStylePatientView: React.FC = () => {
       {/* Main Conversation Canvas */}
       <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
         <div className="max-w-3xl mx-auto h-full flex flex-col justify-between">
-          {/* Welcome Screen when no messages (ChatGPT / Gemini style) */}
+          {/* Welcome Screen when no messages */}
           {messages.length === 0 ? (
             <div className="my-auto text-center space-y-8 py-10 animate-fadeIn">
               <div className="space-y-3">
-                <div className="inline-flex p-3 rounded-2xl bg-gradient-to-tr from-teal-500/20 via-emerald-500/10 to-transparent border border-teal-500/30 text-teal-400 mb-1 shadow-lg shadow-teal-500/5">
+                <div className="inline-flex p-3 rounded-2xl bg-[#CCFBF1] border border-[#99F6E4] text-[#0D9488] mb-1 shadow-sm">
                   <Sparkles className="w-7 h-7" />
                 </div>
-                <h1 className="text-3xl sm:text-4xl font-semibold text-white tracking-tight">
+                <h1 className="text-3xl sm:text-4xl font-semibold text-[#0F172A] tracking-tight">
                   How can I help you today?
                 </h1>
-                <p className="text-sm sm:text-base text-slate-400 max-w-lg mx-auto">
+                <p className="text-sm sm:text-base text-[#475569] max-w-lg mx-auto">
                   Ask me about doctor availability, book or reschedule an appointment, or request an instant voice call.
                 </p>
               </div>
-
-
             </div>
           ) : (
             /* Message Feed */
@@ -196,7 +194,7 @@ export const ChatGPTStylePatientView: React.FC = () => {
                   }`}
                 >
                   {msg.sender === 'assistant' && (
-                    <div className="w-8 h-8 rounded-xl bg-teal-500/20 text-teal-300 flex items-center justify-center shrink-0 border border-teal-500/30 mt-0.5 shadow-sm">
+                    <div className="w-8 h-8 rounded-xl bg-[#CCFBF1] text-[#0D9488] flex items-center justify-center shrink-0 border border-[#99F6E4] mt-0.5 shadow-sm">
                       <Bot className="w-4.5 h-4.5" />
                     </div>
                   )}
@@ -204,35 +202,35 @@ export const ChatGPTStylePatientView: React.FC = () => {
                   <div
                     className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
                       msg.sender === 'patient'
-                        ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white rounded-tr-none shadow-md'
-                        : 'bg-slate-900 border border-slate-800/90 text-slate-200 rounded-tl-none shadow-inner'
+                        ? 'bg-[#0F766E] text-white rounded-tr-none shadow-sm'
+                        : 'bg-white border border-[#E2E8F0] text-[#0F172A] rounded-tl-none shadow-[var(--shadow-card)]'
                     }`}
                   >
                     <p className="whitespace-pre-wrap">{msg.text}</p>
 
                     {/* Target Slot Details Card */}
                     {msg.targetSlot && (
-                      <div className="mt-3 p-3 rounded-xl bg-slate-950/80 border border-teal-500/30 text-xs text-slate-300 space-y-1.5">
-                        <div className="flex items-center justify-between text-teal-300 font-semibold border-b border-slate-800 pb-1.5">
+                      <div className="mt-3 p-3 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] text-xs text-[#475569] space-y-1.5">
+                        <div className="flex items-center justify-between text-[#0F766E] font-semibold border-b border-[#E2E8F0] pb-1.5">
                           <span className="flex items-center gap-1.5">
-                            <Calendar className="w-3.5 h-3.5 text-teal-400" />
+                            <Calendar className="w-3.5 h-3.5 text-[#0D9488]" />
                             Appointment Details
                           </span>
                           {msg.isConfirmed && (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#D1FAE5] text-[#059669] border border-[#A7F3D0]">
                               Confirmed
                             </span>
                           )}
                         </div>
                         {msg.targetSlot.doctor_name && (
                           <p className="flex items-center gap-1.5">
-                            <Stethoscope className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                            <span>Doctor: <strong>{msg.targetSlot.doctor_name}</strong></span>
+                            <Stethoscope className="w-3.5 h-3.5 text-[#64748B] shrink-0" />
+                            <span>Doctor: <strong className="text-[#0F172A]">{msg.targetSlot.doctor_name}</strong></span>
                           </p>
                         )}
                         {msg.targetSlot.location_name && (
                           <p className="flex items-center gap-1.5">
-                            <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            <MapPin className="w-3.5 h-3.5 text-[#64748B] shrink-0" />
                             <span>Location: {msg.targetSlot.location_name}</span>
                           </p>
                         )}
@@ -240,7 +238,7 @@ export const ChatGPTStylePatientView: React.FC = () => {
                     )}
 
                     {msg.isConfirmed && (
-                      <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-400 font-medium">
+                      <div className="mt-2 flex items-center gap-1.5 text-xs text-[#059669] font-medium">
                         <CheckCircle2 className="w-3.5 h-3.5" />
                         <span>Saved to clinic database.</span>
                       </div>
@@ -248,7 +246,7 @@ export const ChatGPTStylePatientView: React.FC = () => {
                   </div>
 
                   {msg.sender === 'patient' && (
-                    <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-300 flex items-center justify-center shrink-0 border border-emerald-500/30 mt-0.5 shadow-sm">
+                    <div className="w-8 h-8 rounded-xl bg-[#CCFBF1] text-[#0F766E] flex items-center justify-center shrink-0 border border-[#99F6E4] mt-0.5 shadow-sm">
                       <User className="w-4.5 h-4.5" />
                     </div>
                   )}
@@ -257,14 +255,14 @@ export const ChatGPTStylePatientView: React.FC = () => {
 
               {chatMutation.isPending && (
                 <div className="flex items-start gap-3.5">
-                  <div className="w-8 h-8 rounded-xl bg-teal-500/20 text-teal-300 flex items-center justify-center shrink-0 border border-teal-500/30 animate-pulse">
+                  <div className="w-8 h-8 rounded-xl bg-[#CCFBF1] text-[#0D9488] flex items-center justify-center shrink-0 border border-[#99F6E4] animate-pulse">
                     <Bot className="w-4.5 h-4.5" />
                   </div>
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl rounded-tl-none px-4 py-3 text-sm text-teal-300 flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-teal-400 animate-bounce" />
-                    <span className="w-2 h-2 rounded-full bg-teal-400 animate-bounce [animation-delay:0.2s]" />
-                    <span className="w-2 h-2 rounded-full bg-teal-400 animate-bounce [animation-delay:0.4s]" />
-                    <span className="text-xs text-slate-400 ml-1">Looking up clinic schedules...</span>
+                  <div className="bg-white border border-[#E2E8F0] rounded-2xl rounded-tl-none px-4 py-3 text-sm text-[#0D9488] flex items-center gap-2 shadow-[var(--shadow-card)]">
+                    <span className="w-2 h-2 rounded-full bg-[#14B8A6] animate-bounce" />
+                    <span className="w-2 h-2 rounded-full bg-[#14B8A6] animate-bounce [animation-delay:0.2s]" />
+                    <span className="w-2 h-2 rounded-full bg-[#14B8A6] animate-bounce [animation-delay:0.4s]" />
+                    <span className="text-xs text-[#64748B] ml-1">Looking up clinic schedules...</span>
                   </div>
                 </div>
               )}
@@ -275,10 +273,10 @@ export const ChatGPTStylePatientView: React.FC = () => {
         </div>
       </div>
 
-      {/* Bottom Floating Prompt Bar (ChatGPT / Gemini style) */}
-      <div className="shrink-0 p-4 sm:p-6 bg-gradient-to-t from-[#090d16] via-[#090d16] to-transparent">
+      {/* Bottom Floating Prompt Bar */}
+      <div className="shrink-0 p-4 sm:p-6 bg-gradient-to-t from-[#F6F9FB] via-[#F6F9FB] to-transparent">
         <div className="max-w-3xl mx-auto">
-          <div className="relative flex items-end gap-2 bg-slate-900/90 border border-slate-700/80 rounded-3xl p-2 sm:p-2.5 shadow-2xl focus-within:border-teal-400/80 focus-within:ring-2 focus-within:ring-teal-400/20 transition-all">
+          <div className="relative flex items-end gap-2 bg-white border border-[#CBD5E1] rounded-3xl p-2 sm:p-2.5 shadow-[var(--shadow-card)] focus-within:border-[#14B8A6] focus-within:ring-2 focus-within:ring-[#14B8A6]/20 transition-all">
             {/* Auto-growing Textarea */}
             <textarea
               ref={textareaRef}
@@ -287,7 +285,7 @@ export const ChatGPTStylePatientView: React.FC = () => {
               onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
               placeholder="Ask anything about doctors, branches, or book an appointment..."
-              className="flex-1 bg-transparent text-slate-100 placeholder-slate-500 text-sm sm:text-base px-3 py-2 outline-none resize-none max-h-36 min-h-[38px] leading-relaxed"
+              className="flex-1 bg-transparent text-[#0F172A] placeholder-[#64748B] text-sm sm:text-base px-3 py-2 outline-none resize-none max-h-36 min-h-[38px] leading-relaxed"
             />
 
             {/* Embedded Action Tags: Voice, Call, Send */}
@@ -296,10 +294,10 @@ export const ChatGPTStylePatientView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setIsVoiceOverlayOpen(true)}
-                className="p-2 sm:px-3 sm:py-1.5 rounded-full text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 transition-all flex items-center gap-1.5 text-xs font-medium cursor-pointer shadow-sm"
+                className="p-2 sm:px-3 sm:py-1.5 rounded-full text-[#6366F1] hover:text-[#4338CA] bg-[#E0E7FF] hover:bg-[#EEF2FF] border border-[#C7D2FE] transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer shadow-sm"
                 title="Voice Assistant Mode"
               >
-                <Mic className="w-4 h-4 text-emerald-400" />
+                <Mic className="w-4 h-4 text-[#6366F1]" />
                 <span className="hidden sm:inline">Voice</span>
               </button>
 
@@ -307,10 +305,10 @@ export const ChatGPTStylePatientView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setIsCallModalOpen(true)}
-                className="p-2 sm:px-3 sm:py-1.5 rounded-full text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 transition-all flex items-center gap-1.5 text-xs font-medium cursor-pointer shadow-sm"
+                className="p-2 sm:px-3 sm:py-1.5 rounded-full text-[#0284C7] hover:text-[#0369A1] bg-[#E0F2FE] hover:bg-[#BAE6FD] border border-[#BAE6FD] transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer shadow-sm"
                 title="Request Outbound Phone Callback"
               >
-                <PhoneCall className="w-4 h-4 text-cyan-400" />
+                <PhoneCall className="w-4 h-4 text-[#0284C7]" />
                 <span className="hidden sm:inline">Call</span>
               </button>
 
@@ -319,7 +317,7 @@ export const ChatGPTStylePatientView: React.FC = () => {
                 type="button"
                 onClick={() => handleSendMessage()}
                 disabled={!inputText.trim() || chatMutation.isPending}
-                className="w-9 h-9 rounded-full bg-gradient-to-r from-teal-500 to-emerald-500 text-white flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed shadow-md hover:from-teal-400 hover:to-emerald-400 transition-all cursor-pointer"
+                className="w-9 h-9 rounded-full bg-[#0F766E] hover:bg-[#0D9488] text-white flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed shadow-sm transition-all cursor-pointer"
                 title="Send Message"
               >
                 <ArrowUp className="w-4 h-4" />
@@ -327,13 +325,14 @@ export const ChatGPTStylePatientView: React.FC = () => {
             </div>
           </div>
 
-          <p className="text-[11px] text-slate-500 text-center mt-2">
-            City Care AI assistant can make mistakes. For medical emergencies, dial 108 immediately.
+          <p className="text-[11px] text-[#64748B] text-center mt-2">
+            City Care AI assistant can make mistakes. For medical emergencies, dial{' '}
+            <strong className="font-bold text-[#DC2626]">108</strong> immediately.
           </p>
         </div>
       </div>
 
-      {/* Voice Mode Overlay (ChatGPT Voice Mode style) */}
+      {/* Voice Mode Overlay */}
       <VoiceOverlay
         isOpen={isVoiceOverlayOpen}
         onClose={() => setIsVoiceOverlayOpen(false)}

@@ -45,14 +45,33 @@ class Settings(BaseSettings):
     VOICE_ASSISTANT_TTS_ENABLED: bool = os.getenv(
         "VOICE_ASSISTANT_TTS_ENABLED", "true"
     ).lower() == "true"
+    VOICE_ASSISTANT_TRANSLATION_TIMEOUT_SECONDS: float = float(
+        os.getenv("VOICE_ASSISTANT_TRANSLATION_TIMEOUT_SECONDS", "12")
+    )
+    VOICE_ASSISTANT_TURN_TIMEOUT_SECONDS: float = float(
+        os.getenv("VOICE_ASSISTANT_TURN_TIMEOUT_SECONDS", "35")
+    )
+    OUTBOUND_CALL_TURN_TIMEOUT_SECONDS: float = float(
+        os.getenv("OUTBOUND_CALL_TURN_TIMEOUT_SECONDS", "20")
+    )
+    OUTBOUND_TTS_TIMEOUT_SECONDS: float = float(
+        os.getenv("OUTBOUND_TTS_TIMEOUT_SECONDS", "2.5")
+    )
+    AUDIO_STORAGE_DIR: str = os.getenv("AUDIO_STORAGE_DIR", "audio_cache")
+    AUDIO_CACHE_TTL_SECONDS: int = int(os.getenv("AUDIO_CACHE_TTL_SECONDS", "900"))
+    INTENT_CLASSIFIER_TIMEOUT_SECONDS: float = float(
+        os.getenv("INTENT_CLASSIFIER_TIMEOUT_SECONDS", "6.0")
+    )
+    DIAGNOSTICS_API_KEY: str = os.getenv("DIAGNOSTICS_API_KEY", "")
 
     # ── Gemini LLM ────────────────────────────────────────────────────────
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+    INTENT_CLASSIFIER_MODEL: str = os.getenv("INTENT_CLASSIFIER_MODEL", "gemini-3.5-flash-lite")
 
     # ── ngrok & Public Domain (tunnel for Twilio webhooks) ─────────────────
-    PUBLIC_DOMAIN: str = os.getenv("PUBLIC_DOMAIN", os.getenv("NGROK_URL", "foam-jury-quality.ngrok-free.dev"))
-    NGROK_URL: str = os.getenv("NGROK_URL", os.getenv("PUBLIC_DOMAIN", "foam-jury-quality.ngrok-free.dev"))
+    PUBLIC_DOMAIN: str = os.getenv("PUBLIC_DOMAIN", os.getenv("NGROK_URL", ""))
+    NGROK_URL: str = os.getenv("NGROK_URL", os.getenv("PUBLIC_DOMAIN", ""))
 
     # ── Front Desk ────────────────────────────────────────────────────────
     FRONT_DESK_EMAIL: str = os.getenv("FRONT_DESK_EMAIL", "")
@@ -69,6 +88,9 @@ class Settings(BaseSettings):
     SLOT_RESERVATION_TIMEOUT_MINUTES: int = 5
     MAX_VERIFY_ATTEMPTS: int = 2
     MAX_SILENCE_TURNS: int = 3
+    OUTBOUND_CALL_RETRY_DELAY_MINUTES: int = int(os.getenv("OUTBOUND_CALL_RETRY_DELAY_MINUTES", "5"))
+    OUTBOUND_CALL_MAX_ATTEMPTS: int = int(os.getenv("OUTBOUND_CALL_MAX_ATTEMPTS", "3"))
+    OUTBOUND_CALL_STATUS_RECONCILE_MINUTES: int = int(os.getenv("OUTBOUND_CALL_STATUS_RECONCILE_MINUTES", "2"))
     RESCHEDULE_CANCEL_CUTOFF_HOURS: int = 24   # block if appt < 24h away
 
     # ── Misc ──────────────────────────────────────────────────────────────

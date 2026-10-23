@@ -258,7 +258,8 @@ def is_invalid_name(text: str) -> bool:
         "reschedule", "appointment", "booking", "book", "cancel",
         "doctor", "checkup", "consult", "i need", "i want", "i am looking",
         "help", "hi", "hello", "new patient", "register", "please", "yes", "no",
-        "could you", "can you", "what is", "where is", "available"
+        "thank you", "thankyou", "thanks", "thank u", "could you", "can you",
+        "what is", "where is", "available"
     ]
     if any(re.search(rf"\b{re.escape(phrase)}\b", cleaned) for phrase in phrases):
         return True
@@ -266,6 +267,38 @@ def is_invalid_name(text: str) -> bool:
     if len(words) > 4 or len(words) == 0:
         return True
     return False
+
+
+_NON_NAME_WORDS = {
+    "i", "im", "i'm", "am", "are", "is", "was", "were", "have", "has", "had",
+    "my", "me", "you", "your", "we", "our", "they", "this", "that", "these",
+    "those", "the", "a", "an", "and", "or", "but", "to", "for", "with", "at",
+    "from", "of", "on", "in", "it", "please", "can", "could", "would", "will",
+    "want", "need", "like", "forward", "transfer", "connect", "send", "talk", "speak",
+    "frontdesk", "front", "desk", "receptionist", "staff", "human", "help", "hello",
+    "hi", "hey", "thanks", "thank", "thankyou", "okay", "ok", "skip", "book",
+    "appointment", "schedule", "cancel", "reschedule", "doctor", "pain", "stomach",
+    "fever", "cough", "headache", "chest", "sick", "hurt", "hurts", "symptoms",
+    # Interrogatives/explanatory terms make short questions look like names if
+    # they are omitted (for example, "what does Python mean?").
+    "what", "does", "do", "did", "how", "why", "when", "where", "which",
+    "who", "whose", "whom", "mean", "meaning", "explain", "define", "tell",
+    "show", "list", "available", "branch", "branches", "clinic", "service",
+}
+
+
+def is_name_only_candidate(text: str) -> bool:
+    """Accept only short, name-like replies; reject ordinary phrases and requests."""
+    cleaned = re.sub(r"[.!?,;:]+$", "", (text or "").strip())
+    words = cleaned.split()
+    if not 1 <= len(words) <= 4 or is_invalid_name(cleaned):
+        return False
+    if any(word.lower().strip("'’-") in _NON_NAME_WORDS for word in words):
+        return False
+    return all(
+        word.replace("'", "").replace("’", "").replace("-", "").isalpha()
+        for word in words
+    )
 
 
 async def register_new_patient(

@@ -51,7 +51,6 @@ async def greet_patient_node(state: CallState, db: AsyncSession) -> Dict[str, An
         import uuid
         repo = ConversationRepository(db)
         await repo.update_state(uuid.UUID(convo_id), ConversationState.IDENTIFYING_PATIENT)
-        await repo.append_message(uuid.UUID(convo_id), role="agent", content=greeting_text)
 
     messages = list(state.get("messages", []))
     messages.append({"role": "assistant", "content": greeting_text})

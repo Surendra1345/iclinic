@@ -2,7 +2,7 @@ import React from 'react'
 import { cn } from '../../lib/utils'
 
 export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
-  variant?: 'emerald' | 'amber' | 'rose' | 'teal' | 'slate' | 'sky'
+  variant?: 'emerald' | 'amber' | 'rose' | 'teal' | 'slate' | 'sky' | 'orange'
   dot?: boolean
 }
 
@@ -14,34 +14,37 @@ export const Badge: React.FC<BadgeProps> = ({
   ...props
 }) => {
   const variants = {
-    emerald: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 shadow-emerald-500/10',
-    amber: 'bg-amber-500/10 text-amber-400 border-amber-500/20 shadow-amber-500/10',
-    rose: 'bg-rose-500/10 text-rose-400 border-rose-500/20 shadow-rose-500/10',
-    teal: 'bg-teal-500/10 text-teal-300 border-teal-500/20 shadow-teal-500/10',
-    slate: 'bg-slate-800/80 text-slate-300 border-slate-700 shadow-slate-900/10',
-    sky: 'bg-sky-500/10 text-sky-400 border-sky-500/20 shadow-sky-500/10',
+    emerald: 'bg-[#D1FAE5] text-[#059669] border-[#A7F3D0]',
+    amber: 'bg-[#FEF3C7] text-[#B45309] border-[#FDE68A]',
+    rose: 'bg-[#FFE4E6] text-[#E11D48] border-[#FECDD3]',
+    orange: 'bg-[#FFEDD5] text-[#EA580C] border-[#FED7AA]',
+    teal: 'bg-[#CCFBF1] text-[#0D9488] border-[#99F6E4]',
+    slate: 'bg-[#F1F5F9] text-[#475569] border-[#E2E8F0]',
+    sky: 'bg-[#E0F2FE] text-[#0284C7] border-[#BAE6FD]',
   }
 
   const dotColors = {
-    emerald: 'bg-emerald-400',
-    amber: 'bg-amber-400',
-    rose: 'bg-rose-400',
-    teal: 'bg-teal-400',
-    slate: 'bg-slate-400',
-    sky: 'bg-sky-400',
+    emerald: 'bg-[#059669]',
+    amber: 'bg-[#B45309]',
+    rose: 'bg-[#E11D48]',
+    orange: 'bg-[#EA580C]',
+    teal: 'bg-[#0D9488]',
+    slate: 'bg-[#64748B]',
+    sky: 'bg-[#0284C7]',
   }
 
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border tracking-wide uppercase shadow-sm',
+        'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border tracking-wide uppercase shadow-xs',
         variants[variant],
         className
       )}
       {...props}
     >
-      {dot && <span className={cn('w-1.5 h-1.5 rounded-full animate-pulse', dotColors[variant])} />}
+      {dot && <span className={cn('w-1.5 h-1.5 rounded-full', dotColors[variant])} />}
       {children}
     </span>
   )
 }
+

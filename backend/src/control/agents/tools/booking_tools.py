@@ -50,6 +50,7 @@ async def book_appointment(
     conversation_id_str: str,
     db: AsyncSession,
     reason: Optional[str] = None,
+    appointment_type_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute atomic booking."""
     service = AppointmentService(db)
@@ -60,15 +61,25 @@ async def book_appointment(
     except Exception:
         conversation_id = uuid.uuid4()
 
-    # Get default or first appointment_type
-    type_result = await db.execute(select(AppointmentType).limit(1))
+    requested_type = (appointment_type_name or "General Consultation").strip()
+    type_result = await db.execute(
+        select(AppointmentType)
+        .where(
+            AppointmentType.is_active.is_(True),
+            AppointmentType.name.ilike(requested_type),
+        )
+        .order_by(AppointmentType.name)
+        .limit(1)
+    )
     appt_type = type_result.scalars().first()
     if not appt_type:
-        # Create a default appointment type if table empty
+        if requested_type.casefold() != "general consultation":
+            raise ValueError(f"Active appointment type '{requested_type}' is not configured.")
         appt_type = AppointmentType(
             id=uuid.uuid4(),
             name="General Consultation",
             duration_minutes=30,
+            is_active=True,
         )
         db.add(appt_type)
         await db.flush()

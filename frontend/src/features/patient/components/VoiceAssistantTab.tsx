@@ -5,6 +5,7 @@ import { Button } from '../../../components/ui/Button'
 import { Badge } from '../../../components/ui/Badge'
 import { AudioWaveVisualizer } from '../../../components/common/AudioWaveVisualizer'
 import { patientService } from '../services/patientService'
+import { resolveVoiceAudioUrl, selectMaleSpeechVoice } from './selectMaleSpeechVoice'
 import { ENV } from '../../../config/env'
 import type { ChatMessage } from '../../../types'
 
@@ -33,6 +34,7 @@ export const VoiceAssistantTab: React.FC = () => {
   const vadAnimationRef = useRef<number | null>(null)
   const hasDetectedSpeechRef = useRef<boolean>(false)
   const discardRecordingRef = useRef<boolean>(false)
+  const isProcessingRef = useRef<boolean>(false)
   const startListeningRef = useRef<() => void>(() => {})
 
   handsFreeRef.current = handsFreeMode
@@ -77,15 +79,10 @@ export const VoiceAssistantTab: React.FC = () => {
 
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.rate = 1.05
-    utterance.pitch = 1.0
+    utterance.pitch = 0.85
 
     // Sarvam audio is preferred by the response handler; this is the browser fallback.
-    const voices = window.speechSynthesis.getVoices()
-    const preferredVoice =
-      voices.find((v) => v.lang.toLowerCase() === language.toLowerCase()) ||
-      voices.find((v) => v.lang.toLowerCase().startsWith(language.slice(0, 2).toLowerCase())) ||
-      voices.find((v) => v.name.includes('Google') || v.name.includes('Natural')) ||
-      voices[0]
+    const preferredVoice = selectMaleSpeechVoice(window.speechSynthesis.getVoices(), language)
 
     if (preferredVoice) {
       utterance.voice = preferredVoice
@@ -107,6 +104,8 @@ export const VoiceAssistantTab: React.FC = () => {
   }
 
   const handleProcessVoiceInput = async (audio: Blob) => {
+    if (!audio.size || isProcessingRef.current) return
+    isProcessingRef.current = true
     setIsProcessing(true)
     try {
       const response = await patientService.sendVoiceAssistantTurn(audio, sessionId)
@@ -129,7 +128,7 @@ export const VoiceAssistantTab: React.FC = () => {
 
       setMessages((prev) => [...prev, botMsg])
       if (response.audio_url) {
-        const audio = new Audio(`${ENV.API_BASE_URL}${response.audio_url}`)
+        const audio = new Audio(resolveVoiceAudioUrl(response.audio_url))
         audio.onplay = () => setIsSpeaking(true)
         audio.onended = () => {
           setIsSpeaking(false)
@@ -153,6 +152,7 @@ export const VoiceAssistantTab: React.FC = () => {
       }
       setMessages((prev) => [...prev, fallbackMsg])
     } finally {
+      isProcessingRef.current = false
       setIsProcessing(false)
     }
   }
@@ -176,7 +176,7 @@ export const VoiceAssistantTab: React.FC = () => {
   }
 
   const startListening = () => {
-    if (isSpeaking || isProcessing) return
+    if (isSpeaking || isProcessingRef.current) return
 
     navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
       const recorder = new MediaRecorder(stream)
@@ -309,12 +309,12 @@ export const VoiceAssistantTab: React.FC = () => {
       {/* Intro Header */}
       <div className="text-center space-y-2">
         <Badge variant="teal" className="mb-1">
-          <Sparkles className="w-3 h-3 text-teal-400 mr-1 inline" /> Real-time Speech AI
+          <Sparkles className="w-3 h-3 text-[#0D9488] mr-1 inline" /> Real-time Speech AI
         </Badge>
-        <h2 className="text-2xl sm:text-3xl font-semibold text-white tracking-tight">
+        <h2 className="text-2xl sm:text-3xl font-semibold text-[#0F172A] tracking-tight">
           Clinical Voice Assistant
         </h2>
-        <p className="text-sm text-slate-400 max-w-xl mx-auto">
+        <p className="text-sm text-[#475569] max-w-xl mx-auto">
           Talk directly with our scheduling AI using your computer or mobile microphone. Real-time slot lookup and voice replies.
         </p>
       </div>
@@ -324,23 +324,23 @@ export const VoiceAssistantTab: React.FC = () => {
         {/* Dynamic Waveform Visualizer */}
         <div className="space-y-3">
           <div className="flex items-center justify-between px-2">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+            <span className="text-xs font-semibold text-[#475569] uppercase tracking-wider">
               Audio Frequency & Feedback
             </span>
             <div className="flex items-center gap-2">
               {isListening && (
-                <span className="inline-flex items-center gap-1.5 text-xs text-rose-400 animate-pulse font-medium">
-                  <span className={`w-2 h-2 rounded-full ${userIsSpeaking ? 'bg-emerald-400' : 'bg-rose-500'}`} />
+                <span className="inline-flex items-center gap-1.5 text-xs text-[#E11D48] animate-pulse font-medium">
+                  <span className={`w-2 h-2 rounded-full ${userIsSpeaking ? 'bg-[#059669]' : 'bg-[#E11D48]'}`} />
                   {userIsSpeaking ? 'Hearing your voice...' : 'Listening to you...'}
                 </span>
               )}
               {isSpeaking && (
-                <span className="inline-flex items-center gap-1.5 text-xs text-teal-400 animate-pulse font-medium">
+                <span className="inline-flex items-center gap-1.5 text-xs text-[#0D9488] animate-pulse font-medium">
                   <Volume2 className="w-3.5 h-3.5" /> AI Speaking...
                 </span>
               )}
               {!isListening && !isSpeaking && (
-                <span className="text-xs text-slate-500">Standby (Mic Ready)</span>
+                <span className="text-xs text-[#64748B]">Standby (Mic Ready)</span>
               )}
             </div>
           </div>
@@ -353,7 +353,7 @@ export const VoiceAssistantTab: React.FC = () => {
         </div>
 
         {/* Live Conversation Transcript */}
-        <div className="max-h-[320px] min-h-[180px] overflow-y-auto space-y-3 p-4 rounded-xl bg-slate-950/70 border border-slate-800/80">
+        <div className="max-h-[320px] min-h-[180px] overflow-y-auto space-y-3 p-4 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0]">
           {messages.map((msg) => (
             <div
               key={msg.id}
@@ -362,7 +362,7 @@ export const VoiceAssistantTab: React.FC = () => {
               }`}
             >
               {msg.sender === 'assistant' && (
-                <div className="w-8 h-8 rounded-lg bg-teal-500/20 text-teal-300 flex items-center justify-center shrink-0 border border-teal-500/30">
+                <div className="w-8 h-8 rounded-lg bg-[#CCFBF1] text-[#0D9488] flex items-center justify-center shrink-0 border border-[#99F6E4]">
                   <Bot className="w-4 h-4" />
                 </div>
               )}
@@ -370,8 +370,8 @@ export const VoiceAssistantTab: React.FC = () => {
               <div
                 className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
                   msg.sender === 'patient'
-                    ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white rounded-tr-none shadow-md'
-                    : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-none shadow-inner'
+                    ? 'bg-[#0F766E] text-white rounded-tr-none shadow-sm'
+                    : 'bg-white border border-[#E2E8F0] text-[#0F172A] rounded-tl-none shadow-[var(--shadow-card)]'
                 }`}
               >
                 <div className="flex items-center justify-between gap-4 mb-1 text-[11px] opacity-70">
@@ -384,8 +384,8 @@ export const VoiceAssistantTab: React.FC = () => {
 
                 {/* Target slot confirmation pill */}
                 {msg.targetSlot && (
-                  <div className="mt-2.5 p-2.5 rounded-lg bg-teal-950/80 border border-teal-500/30 text-xs text-teal-200">
-                    <p className="font-semibold text-teal-300">Appointment Option</p>
+                  <div className="mt-2.5 p-2.5 rounded-lg bg-[#F0FDFA] border border-[#99F6E4] text-xs text-[#0F766E]">
+                    <p className="font-semibold text-[#0F766E]">Appointment Option</p>
                     <p>Doctor: {msg.targetSlot.doctor_name || 'Assigned Specialist'}</p>
                     <p>Time: {msg.targetSlot.time || 'Next Open Slot'}</p>
                   </div>
@@ -393,7 +393,7 @@ export const VoiceAssistantTab: React.FC = () => {
               </div>
 
               {msg.sender === 'patient' && (
-                <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-300 flex items-center justify-center shrink-0 border border-emerald-500/30">
+                <div className="w-8 h-8 rounded-lg bg-[#CCFBF1] text-[#0F766E] flex items-center justify-center shrink-0 border border-[#99F6E4]">
                   <User className="w-4 h-4" />
                 </div>
               )}
@@ -403,7 +403,7 @@ export const VoiceAssistantTab: React.FC = () => {
           {/* Active transcription preview while user is speaking */}
           {transcript && (
             <div className="flex items-start justify-end gap-3 opacity-90 animate-pulse">
-              <div className="max-w-[80%] rounded-2xl px-4 py-2.5 bg-slate-800/80 border border-teal-500/40 text-teal-200 text-sm italic">
+              <div className="max-w-[80%] rounded-2xl px-4 py-2.5 bg-white border border-[#14B8A6] text-[#0D9488] text-sm italic shadow-sm">
                 "{transcript}"
               </div>
             </div>
@@ -411,8 +411,8 @@ export const VoiceAssistantTab: React.FC = () => {
 
           {/* Agent processing spinner */}
           {isProcessing && (
-            <div className="flex items-center gap-2 text-xs text-teal-400 pl-2">
-              <span className="w-2 h-2 rounded-full bg-teal-400 animate-ping" />
+            <div className="flex items-center gap-2 text-xs text-[#0D9488] pl-2">
+              <span className="w-2 h-2 rounded-full bg-[#14B8A6] animate-ping" />
               Thinking & consulting clinic scheduler...
             </div>
           )}
@@ -421,7 +421,7 @@ export const VoiceAssistantTab: React.FC = () => {
         </div>
 
         {/* Voice Controls Bar */}
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-slate-800">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-[#E2E8F0]">
           <Button
             type="button"
             variant="ghost"
@@ -440,14 +440,14 @@ export const VoiceAssistantTab: React.FC = () => {
                 setHandsFreeMode(next)
                 handsFreeRef.current = next
               }}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all flex items-center gap-1.5 cursor-pointer ${
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-all flex items-center gap-1.5 cursor-pointer ${
                 handsFreeMode
-                  ? 'bg-teal-500/20 border-teal-500/50 text-teal-300 shadow-sm shadow-teal-500/20'
-                  : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-slate-200'
+                  ? 'bg-[#CCFBF1] border-[#99F6E4] text-[#0D9488] shadow-sm'
+                  : 'bg-white border-[#CBD5E1] text-[#64748B] hover:text-[#0F172A]'
               }`}
               title="When Hands-Free is active, the assistant automatically listens after speaking and submits after a brief pause."
             >
-              <span className={`w-2 h-2 rounded-full ${handsFreeMode ? 'bg-teal-400 animate-pulse' : 'bg-slate-500'}`} />
+              <span className={`w-2 h-2 rounded-full ${handsFreeMode ? 'bg-[#0D9488] animate-pulse' : 'bg-slate-400'}`} />
               Hands-Free: {handsFreeMode ? 'ON' : 'OFF'}
             </button>
 
@@ -459,7 +459,7 @@ export const VoiceAssistantTab: React.FC = () => {
               className={isListening ? 'animate-pulse' : ''}
               leftIcon={
                 isListening ? (
-                  <MicOff className="w-5 h-5 text-rose-300" />
+                  <MicOff className="w-5 h-5 text-white" />
                 ) : (
                   <Mic className="w-5 h-5 text-white" />
                 )
@@ -472,8 +472,8 @@ export const VoiceAssistantTab: React.FC = () => {
 
         {/* Error notification if mic blocked */}
         {speechError && (
-          <div className="p-3.5 rounded-xl bg-rose-950/60 border border-rose-500/40 text-rose-200 text-xs flex items-center gap-2.5">
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+          <div className="p-3.5 rounded-xl bg-[#FFE4E6] border border-[#FECDD3] text-[#E11D48] text-xs flex items-center gap-2.5">
+            <AlertCircle className="w-4 h-4 text-[#E11D48] shrink-0" />
             <span>{speechError}</span>
           </div>
         )}

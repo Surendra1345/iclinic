@@ -18,6 +18,9 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
   if (norm === 'cancelled') {
     return <Badge variant="rose">Cancelled</Badge>
   }
+  if (norm === 'forwarded' || norm === 'escalated') {
+    return <Badge variant="orange">Escalated</Badge>
+  }
   if (norm === 'completed') {
     return <Badge variant="sky">Completed</Badge>
   }
