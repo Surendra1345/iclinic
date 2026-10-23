@@ -1,6 +1,6 @@
 import unittest
 
-from src.services.medical_safety_service import is_emergency_report
+from src.core.services.medical_safety_service import is_emergency_report
 
 
 class EmergencyDetectionTests(unittest.TestCase):

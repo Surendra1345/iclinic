@@ -54,8 +54,26 @@ async def start_conversation_node(state: CallState, db: AsyncSession) -> Dict[st
             "is_completed": False,
         }
 
-    # If conversation is already active, preserve all existing state flags
-    return {
+    # The checkpointer carries state between turns, so per-turn outcome flags must be
+    # reset here. Otherwise a past booking/cancel keeps routing later turns to the
+    # confirmation step with stale data. All other state is preserved.
+    turn_reset: Dict[str, Any] = {
         "conversation_id": convo_id,
+        "booking_confirmed": False,
+        "is_completed": False,
     }
+    if state.get("booking_confirmed") and state.get("intent") == "cancel":
+        # The cancelled appointment is no longer active; later turns must not act on it.
+        turn_reset.update({
+            "active_appointment_id": None,
+            "active_appointment_details": None,
+            "awaiting_cancel_confirmation": False,
+            "awaiting_change_action_choice": False,
+            "target_slot_id": None,
+            "target_slot_details": None,
+            "offered_slots": [],
+            "intent": None,
+            "pending_intent": None,
+        })
+    return turn_reset
 

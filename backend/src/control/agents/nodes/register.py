@@ -1,6 +1,7 @@
 """New patient registration node — collects Name, DOB, Email, and Phone."""
 import re
 import uuid
+from src.config.settings import settings
 from typing import Any, Dict
 # pyrefly: ignore[missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -108,7 +109,7 @@ async def register_patient_node(state: CallState, db: AsyncSession) -> Dict[str,
         return {
             "is_new_patient": True,
             "patient_name": None,
-            "latest_agent_speech": "Welcome to City Care Clinic! Could you please tell me your full name to start registration?",
+            "latest_agent_speech": f"Welcome to {settings.CLINIC_NAME}! Could you please tell me your full name to start registration?",
         }
 
     # Step B: Missing Date of Birth
@@ -193,7 +194,7 @@ async def register_patient_node(state: CallState, db: AsyncSession) -> Dict[str,
         )
     else:
         latest_agent_speech = (
-            f"Thank you, {name}. You are now registered and verified with City Care Clinic. "
+            f"Thank you, {name}. You are now registered and verified with {settings.CLINIC_NAME}. "
             "How can I assist you with your appointment today?"
         )
 

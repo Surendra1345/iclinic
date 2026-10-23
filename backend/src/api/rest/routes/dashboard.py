@@ -28,12 +28,13 @@ from src.data.repositories.appointment_repository import AppointmentRepository
 from src.data.repositories.conversation_repository import ConversationRepository
 from src.data.repositories.slot_repository import SlotRepository
 
-from src.services.sarvam_service import SarvamService
-from src.services.conversation_turn_service import conversation_turn_service
+from src.handlers.http_clients.sarvam_service import SarvamService
+from src.core.services.conversation_turn_service import conversation_turn_service
 
 logger = logging.getLogger(__name__)
 
 dashboard_router = APIRouter(prefix="/api", tags=["Dashboard & Patient Chat"])
+from src.schemas.dashboard import AppointmentResponse, ChatMessageRequest, UpdateForwardedRequest
 sarvam_service = SarvamService()
 
 
@@ -43,34 +44,6 @@ def _is_name_only_message(message: str) -> bool:
 
 
 # ?????? Schemas ?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
-
-class ChatMessageRequest(BaseModel):
-    message: str
-    patient_phone: Optional[str] = None
-    patient_name: Optional[str] = None
-    patient_email: Optional[str] = None
-    session_id: Optional[str] = None
-    generate_audio: Optional[bool] = False
-
-
-class AppointmentResponse(BaseModel):
-    id: str
-    patient_name: str
-    patient_phone: str
-    doctor_name: str
-    specialty: str
-    location_name: str
-    location_address: str
-    start_time: str
-    end_time: str
-    status: str
-    created_at: str
-
-
-class UpdateForwardedRequest(BaseModel):
-    status: str = "contacted"  # "pending", "contacted", "resolved"
-    notes: Optional[str] = None
-
 
 # ?????? Frontdesk Endpoints ?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 
@@ -151,7 +124,7 @@ async def list_appointments(
             p_phone = patient.phone if patient else "-"
             doc_name = provider.full_name if provider else "General Doctor"
             spec = provider.specialty if provider else "General"
-            loc_name = loc.name if loc else "City Care Clinic"
+            loc_name = loc.name if loc else settings.CLINIC_NAME
             loc_addr = loc.address if loc else ""
 
             # In-memory filter for location if specified
@@ -242,7 +215,7 @@ async def list_registered_patients(
                     "appointment_id": str(active_appt.id),
                     "doctor_name": prov.full_name if prov else "Doctor",
                     "specialty": prov.specialty if prov else "General",
-                    "location_name": loc.name if loc else "City Care Clinic",
+                    "location_name": loc.name if loc else settings.CLINIC_NAME,
                     "start_time": slot.start_time.isoformat() if slot else "",
                     "status": active_appt.status.value,
                 }
@@ -422,7 +395,7 @@ async def list_forwarded_requests(
                             "appointment_id": str(appt.id),
                             "doctor_name": prov.full_name if prov else "Assigned Doctor",
                             "specialty": prov.specialty if prov else "General Medicine",
-                            "location_name": loc.name if loc else "City Care Clinic",
+                            "location_name": loc.name if loc else settings.CLINIC_NAME,
                             "location_address": loc.address if loc else "",
                             "start_time": appt.slot.start_time.isoformat(),
                             "status": appt.status.value,
@@ -693,7 +666,7 @@ async def chat_with_clinic_agent(req: ChatMessageRequest):
             if req.generate_audio:
                 try:
                     import time
-                    from src.services.audio_storage_service import audio_storage_service
+                    from src.handlers.http_clients.audio_storage_service import audio_storage_service
                     generated_audio = await sarvam_service.text_to_speech(speech, target_language_code="en-IN")
                     if generated_audio:
                         audio_id = await audio_storage_service.store(generated_audio)

@@ -12,11 +12,8 @@ from sqlalchemy.orm import selectinload
 
 from src.constants.enums import SlotStatus
 from src.config.settings import settings
+from src.core.exceptions import SlotUnavailableError
 from src.data.models.postgres.slot import Slot
-
-
-class SlotUnavailableError(ValueError):
-    """Raised when a slot selected from stale availability is no longer free."""
 
 
 class SlotRepository:

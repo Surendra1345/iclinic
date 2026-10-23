@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 # pyrefly: ignore[missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.services.appointment_service import AppointmentService
+from src.core.services.appointment_service import AppointmentService
 
 
 async def cancel_appointment(

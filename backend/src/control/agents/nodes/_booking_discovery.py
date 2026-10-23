@@ -1,14 +1,16 @@
 """Date, doctor, branch and specialty slot discovery for booking."""
+import difflib
 import re
 from datetime import datetime, timezone
 from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.control.agents.tools.appointment_time import CLINIC_TIMEZONE
+from src.utils.appointment_time import CLINIC_TIMEZONE
 from src.control.agents.tools.slot_tools import (
     get_slots_by_date_and_criteria,
     get_specialties_for_branch, get_branch_doctors_info, get_branches_for_specialty, reserve_slot,
 )
+from src.control.agents.tools import clinic_directory
 from src.control.agents.nodes.booking_helpers import _clean_loc, _clean_slot_time, _extract_time_of_day, _format_slot_time_str, _match_branch, _match_doctor
 
 
@@ -447,6 +449,15 @@ async def discover_booking_slots(
     ]):
         specialty_match = "General Medicine"
 
+    if not specialty_match:
+        # Tolerate misspelt specialties ("cordiologu") using the specialties that really exist.
+        for token in tokens:
+            if len(token) >= 5:
+                close = difflib.get_close_matches(token, [s.lower() for s in clinic_directory.all_specialties()], n=1, cutoff=0.75)
+                if close:
+                    specialty_match = next(s for s in clinic_directory.all_specialties() if s.lower() == close[0])
+                    break
+
     active_specialty = specialty_match or state.get("preferred_specialty")
     mentioned_branch = _match_branch(user_speech)
     named_doctor = _match_doctor(user_speech)
@@ -480,7 +491,7 @@ async def discover_booking_slots(
             if active_specialty not in branch_specialties:
                 # Branch does NOT offer this specialty!
                 avail_branches = get_branches_for_specialty(active_specialty)
-                avail_text = ", ".join(avail_branches[:-1]) + f", or {avail_branches[-1]}" if len(avail_branches) > 1 else (avail_branches[0] if avail_branches else "our other")
+                avail_text = clinic_directory.join_names(avail_branches, "or") or "our other"
                 branch_info = get_branch_doctors_info(mentioned_branch)
                 doc_strings = [f"{d['name']} ({d['specialty']})" for d in branch_info["doctors"]]
                 docs_text = ", ".join(doc_strings[:-1]) + f", and {doc_strings[-1]}" if len(doc_strings) > 1 else (doc_strings[0] if doc_strings else "")
@@ -549,13 +560,13 @@ async def discover_booking_slots(
     if is_general_location_question:
         if active_specialty:
             avail_branches = get_branches_for_specialty(active_specialty)
-            avail_text = ", ".join(avail_branches[:-1]) + f", and {avail_branches[-1]}" if len(avail_branches) > 1 else (avail_branches[0] if avail_branches else "our other")
+            avail_text = clinic_directory.join_names(avail_branches) or "our other"
             speech = (
-                f"City Care Clinic has four branches in Chennai: Anna Nagar, T. Nagar, Velachery, and Tambaram. "
+                f"{clinic_directory.branches_sentence()} "
                 f"For {active_specialty}, doctors are available at our {avail_text} branches. Which branch would you prefer?"
             )
         else:
-            speech = "City Care Clinic has four branches in Chennai: Anna Nagar, T. Nagar, Velachery, and Tambaram. Which branch or doctor would you prefer?"
+            speech = f"{clinic_directory.branches_sentence()} Which branch or doctor would you prefer?"
         return {
             "target_slot_id": None,
             "target_slot_details": None,
@@ -578,7 +589,7 @@ async def discover_booking_slots(
                     return _slot_offer_response(slots, location=loc, specialty=specialty_match, requested_time=requested_time, requested_window=requested_window)
             else:
                 avail_branches = get_branches_for_specialty(specialty_match)
-                avail_text = ", ".join(avail_branches[:-1]) + f", or {avail_branches[-1]}" if len(avail_branches) > 1 else (avail_branches[0] if avail_branches else "our other")
+                avail_text = clinic_directory.join_names(avail_branches, "or") or "our other"
                 return {
                     "preferred_location": None,
                     "preferred_doctor": None,
@@ -593,22 +604,23 @@ async def discover_booking_slots(
                 }
 
         avail_branches = get_branches_for_specialty(specialty_match)
-        avail_text = ", ".join(avail_branches[:-1]) + f", and {avail_branches[-1]}" if len(avail_branches) > 1 else "our clinic branches"
+        avail_text = clinic_directory.join_names(avail_branches) or "our clinic branches"
         is_direct_specialty = any(w in lower_speech for w in [
             "general consultation", "consultation", "checkup", "general checkup",
-            "medicine", "cardiology", "dermatology", "orthopedics", "pediatrics",
-            "gynecology", "ent", "physician", "doctor"
-        ])
+            "medicine", "physician", "doctor",
+        ]) or any(sp.lower() in lower_speech for sp in clinic_directory.all_specialties())
         if is_direct_specialty:
-            speech = f"For {specialty_match}, which clinic branch would you prefer? We have branches in Anna Nagar, T. Nagar, Velachery, and Tambaram."
+            speech = f"For {specialty_match}, which clinic branch would you prefer? We have branches in {clinic_directory.join_names(clinic_directory.branch_names())}."
         else:
-            speech = f"For those symptoms, {specialty_match} would be the appropriate specialty. Which clinic branch would you prefer? We have branches in Anna Nagar, T. Nagar, Velachery, and Tambaram."
+            speech = f"For those symptoms, {specialty_match} would be the appropriate specialty. Which clinic branch would you prefer? We have branches in {clinic_directory.join_names(clinic_directory.branch_names())}."
         return {
             "preferred_specialty": specialty_match,
+            "awaiting_preferred_date": True,
             "latest_agent_speech": speech,
         }
 
     # 12. Fallback prompt
     return {
+        "awaiting_preferred_date": True,
         "latest_agent_speech": "Sure! Which clinic branch or doctor would you prefer, and what date works best for you?",
     }

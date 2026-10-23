@@ -12,6 +12,13 @@ from src.data.repositories.conversation_repository import ConversationRepository
 
 logger = logging.getLogger(__name__)
 
+_FINAL_OUTCOMES = (
+    OutcomeType.BOOKED,
+    OutcomeType.RESCHEDULED,
+    OutcomeType.CANCELLED,
+    OutcomeType.HANDED_TO_FRONT_DESK,
+)
+
 
 async def end_call_node(state: CallState, db: AsyncSession) -> Dict[str, Any]:
     convo_id = state.get("conversation_id")
@@ -21,7 +28,13 @@ async def end_call_node(state: CallState, db: AsyncSession) -> Dict[str, Any]:
     if convo_id:
         try:
             repo = ConversationRepository(db)
-            if action_confirmed and intent == "reschedule":
+            existing = await repo.get(uuid.UUID(convo_id))
+            if existing is not None and existing.outcome in _FINAL_OUTCOMES:
+                # A booking / reschedule / cancellation / hand-off was already recorded; a later
+                # "thank you" must not turn it into "abandoned".
+                await repo.mark_ended(uuid.UUID(convo_id))
+                outcome = None
+            elif action_confirmed and intent == "reschedule":
                 outcome = OutcomeType.RESCHEDULED
             elif action_confirmed and intent == "cancel":
                 outcome = OutcomeType.CANCELLED
@@ -30,7 +43,8 @@ async def end_call_node(state: CallState, db: AsyncSession) -> Dict[str, Any]:
             else:
                 outcome = OutcomeType.ABANDONED
 
-            await repo.close(conversation_id=uuid.UUID(convo_id), outcome=outcome)
+            if outcome is not None:
+                await repo.close(conversation_id=uuid.UUID(convo_id), outcome=outcome)
         except Exception as e:
             logger.error(f"Error closing conversation in DB: {e}")
 

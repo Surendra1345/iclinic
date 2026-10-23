@@ -8,10 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config.settings import settings
 from src.control.agents.state import CallState
-from src.control.agents.tools.appointment_time import format_appointment_time
+from src.utils.appointment_time import format_appointment_time
 from src.constants.enums import ConfirmationStatusType
 from src.data.repositories.conversation_repository import ConversationRepository
-from src.services.notification_service import NotificationService
+from src.core.services.notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
 

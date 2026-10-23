@@ -1,5 +1,6 @@
 """Booking tools ??? checking active appointments and creating bookings."""
 import uuid
+from src.config.settings import settings
 from typing import Any, Dict, Optional
 # pyrefly: ignore[missing-import]
 from sqlalchemy import select
@@ -7,10 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.constants.enums import ChannelType
+from src.data.models.postgres.conversation import Conversation
 from src.data.models.postgres.appointment_type import AppointmentType
 from src.data.repositories.appointment_repository import AppointmentRepository
-from src.control.agents.tools.appointment_time import format_appointment_time
-from src.services.appointment_service import AppointmentService
+from src.utils.appointment_time import format_appointment_time
+from src.core.services.appointment_service import AppointmentService
 
 
 async def check_patient_active_appointment(patient_id_str: str, db: AsyncSession) -> Optional[Dict[str, Any]]:
@@ -30,7 +32,7 @@ async def check_patient_active_appointment(patient_id_str: str, db: AsyncSession
     location_name = (
         appt.slot.provider.location.name
         if appt.slot and appt.slot.provider and appt.slot.provider.location
-        else "City Care Clinic"
+        else settings.CLINIC_NAME
     )
     return {
         "appointment_id": str(appt.id),
@@ -61,6 +63,10 @@ async def book_appointment(
     except Exception:
         conversation_id = uuid.uuid4()
 
+    # The appointment belongs to the channel (chat / voice / outbound_call) of its conversation.
+    conversation = await db.get(Conversation, conversation_id)
+    channel = conversation.channel if conversation is not None else ChannelType.OUTBOUND_CALL
+
     requested_type = (appointment_type_name or "General Consultation").strip()
     type_result = await db.execute(
         select(AppointmentType)
@@ -89,7 +95,7 @@ async def book_appointment(
         slot_id=slot_id,
         appointment_type_id=appt_type.id,
         conversation_id=conversation_id,
-        channel=ChannelType.OUTBOUND_CALL,
+        channel=channel,
         reason=reason,
     )
     return {

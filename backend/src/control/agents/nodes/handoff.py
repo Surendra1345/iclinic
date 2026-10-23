@@ -10,8 +10,8 @@ from src.config.settings import settings
 from src.constants.enums import OutcomeType
 from src.data.repositories.conversation_repository import ConversationRepository
 from src.control.agents.tools.registration_tools import extract_email, extract_phone
-from src.services.notification_service import NotificationService
-from src.services.medical_safety_service import is_emergency_report
+from src.core.services.notification_service import NotificationService
+from src.core.services.medical_safety_service import is_emergency_report
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,10 @@ async def handoff_to_front_desk_node(state: CallState, db: AsyncSession) -> Dict
             "or go to the nearest hospital emergency room immediately. "
             "Do not wait for a clinic appointment or callback."
         )
-        if convo_id:
+        # Guard: only send the emergency alert once, even if the patient
+        # sends additional messages while the emergency state is active.
+        already_alerted = bool(state.get("frontdesk_alert_sent"))
+        if convo_id and not already_alerted:
             try:
                 repo = ConversationRepository(db)
                 await repo.update_collected_details(
@@ -87,6 +90,7 @@ async def handoff_to_front_desk_node(state: CallState, db: AsyncSession) -> Dict
                         "emergency": True,
                     },
                 )
+                already_alerted = True
             except Exception as e:
                 logger.error(f"Error executing emergency handoff DB operations: {e}")
 
@@ -95,6 +99,7 @@ async def handoff_to_front_desk_node(state: CallState, db: AsyncSession) -> Dict
             "handoff_required": True,
             "awaiting_handoff_contact": False,
             "handoff_completed": True,
+            "frontdesk_alert_sent": already_alerted,
             "is_completed": True,
             "latest_agent_speech": emergency_speech,
         }

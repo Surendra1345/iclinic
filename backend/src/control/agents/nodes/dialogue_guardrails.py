@@ -64,3 +64,40 @@ def is_explicit_rejection(text: str) -> bool:
     return normalized in _NO or bool(
         re.match(r"^(?:no|nope|not that|don't|do not|keep my appointment)\b", normalized)
     )
+
+
+_REPEAT_EXACT = {
+    "what", "huh", "pardon", "pardon me", "sorry", "come again", "excuse me", "say again",
+    "repeat", "repeat please", "can you repeat", "could you repeat", "please repeat",
+    "what was that", "say what", "one more time", "again", "again please",
+}
+# Lenient on purpose: speech-to-text and typing errors are common ("counldn't understad").
+_NOT_UNDERSTOOD = re.compile(
+    r"\b(?:not|no|can't|couldn't|didn't|don't|won't|cant|cannot|couldnt|couldn|counldn|didnt|dont|wont|unable|hard)\b[^.?!]{0,25}"
+    r"\b(?:und\w*st\w*|follow|catch|hear|get)\b"
+)
+_ASKS_REPEAT = re.compile(
+    r"\b(?:repeat|say (?:that|it|this)(?: again)?|read (?:that|it|this)(?: again| out)?|"
+    r"tell me (?:that |it )?again|once more|one more time|what did you say|what was that|"
+    r"speak (?:more )?(?:slowly|slower|clearly|simply|loudly|louder|up)|louder|slow(?:er| down)|"
+    r"too fast|not clear|unclear|confusing|confused|make it simple|in simple words|"
+    r"what do you mean|hard to hear)\b"
+)
+_LEADING_FILLER = re.compile(r"^(?:(?:yeah|yes|yep|yup|okay|ok|sure|hey|hi|hello|um|uh|so|well|please|sorry)\b[\s,]*)+")
+
+
+def is_repeat_request(text: str) -> bool:
+    """True when the patient says they did not understand and wants the assistant to say it again.
+
+    A leading "yeah/okay/please" is just a filler here ("Yeah, can you please read that?").
+    """
+    normalized = _normalize(text)
+    stripped = _LEADING_FILLER.sub("", normalized).strip()
+    for candidate in {normalized, stripped}:
+        if not candidate:
+            continue
+        if candidate in _REPEAT_EXACT:
+            return True
+        if _NOT_UNDERSTOOD.search(candidate) or _ASKS_REPEAT.search(candidate):
+            return True
+    return False

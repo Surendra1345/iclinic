@@ -66,6 +66,8 @@ class ConversationTurnService:
         if result.get("handoff_required"):
             return ConversationState.HANDED_TO_FRONT_DESK
         intent = str(result.get("intent") or "").lower()
+        if intent == "close":
+            return None  # end_call has already recorded the final state
         if result.get("booking_confirmed"):
             return {"book": ConversationState.BOOKED, "reschedule": ConversationState.RESCHEDULED,
                     "cancel": ConversationState.CANCELLED}.get(intent)
