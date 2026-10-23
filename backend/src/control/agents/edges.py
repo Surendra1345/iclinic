@@ -24,7 +24,7 @@ def _contains_phrase(text: str, phrases: tuple[str, ...]) -> bool:
 
 def route_after_start(state: CallState) -> str:
     """Decide where to route immediately after start_conversation_node."""
-    if state.get("awaiting_handoff_contact"):
+    if state.get("is_emergency") or state.get("awaiting_handoff_contact"):
         return "handoff"
     speech = state.get("latest_user_speech", "")
     if not state.get("is_verified") and _contains_phrase(speech, _NEW_PATIENT_PHRASES):

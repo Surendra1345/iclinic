@@ -13,10 +13,11 @@ from src.control.agents.state import CallState
 from src.control.agents.nodes.dialogue_guardrails import (
     is_explicit_confirmation,
     is_explicit_rejection,
+    is_repeat_request,
     is_reschedule_confirmation,
 )
 from src.control.agents.tools.registration_tools import is_closing_or_thanks, is_greeting, validate_dob
-from src.control.agents.tools.registration_tools import is_name_only_candidate
+from src.control.agents.tools.registration_tools import is_name_correction, is_name_only_candidate, name_from_speech
 from src.control.agents.tools.slot_tools import (
     get_slots_by_date_and_criteria,
     has_date_reference,
@@ -31,14 +32,16 @@ from src.control.agents.nodes.booking_helpers import (
     _clean_loc, _extract_time_of_day, _extract_time_window, _format_slot_time_str,
     _match_branch, _match_doctor,
 )
-from src.control.agents.tools.appointment_time import CLINIC_TIMEZONE
+from src.utils.appointment_time import CLINIC_TIMEZONE
+from src.utils.pii import redact_pii
+from src.control.agents.tools.slot_speech import day_availability_speech, period_from_request
 from src.data.models.postgres.location import Location
 from src.data.models.postgres.provider import Provider
-from src.services.intent_classification_service import (
+from src.core.services.intent_classification_service import (
     intent_classification_service,
     IntentLabel,
 )
-from src.services.medical_safety_service import is_emergency_report
+from src.core.services.medical_safety_service import is_emergency_report
 
 logger = logging.getLogger(__name__)
 
@@ -56,20 +59,7 @@ def _recent_dialogue_context(state: CallState, current_message: str) -> str:
         normalized = " ".join(content.lower().split())
         if role in ("patient", "user") and normalized == current_normalized:
             continue
-        content = re.sub(r"\b[^\s@]+@[^\s@]+\.[^\s@]+\b", "[email]", content)
-        content = re.sub(r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)(?!\d)", "[phone]", content)
-        content = re.sub(
-            r"\b(?:\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}|\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\b",
-            "[date]", content,
-        )
-        content = re.sub(
-            r"\b(?:\d{1,2}(?:st|nd|rd|th)?\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{4}|"
-            r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?[,]?\s+\d{4})\b",
-            "[date]", content, flags=re.IGNORECASE,
-        )
-        patient_name = (state.get("patient_name") or "").strip()
-        if patient_name:
-            content = re.sub(re.escape(patient_name), "[patient]", content, flags=re.IGNORECASE)
+        content = redact_pii(content, state.get("patient_name"))
         tail.append(("patient" if role in ("patient", "user") else "assistant", content[:350]))
         if len(tail) == 4:
             break
@@ -129,61 +119,42 @@ async def _handle_doctor_availability_query(
                     requested_specialty = max(fuzzy)[1]
         branch = _match_branch(user_speech)
         doctor_name = _match_doctor(user_speech)
+        local_day = date_start.astimezone(CLINIC_TIMEZONE).date()
+        # Fetch the whole day, then answer by morning / afternoon / evening.
         slots = await get_slots_by_date_and_criteria(
             db,
-            date_query=user_speech,
+            date_query=local_day.isoformat(),
             specialty=requested_specialty,
             location_name=branch,
             doctor_name=doctor_name,
-            requested_time=requested_time,
-            requested_window=requested_window,
             limit=50,
         )
-        no_exact_time_match = not slots and (requested_time is not None or requested_window is not None)
-        if no_exact_time_match:
-            slots = await get_slots_by_date_and_criteria(
-                db,
-                date_query=date_start.astimezone(CLINIC_TIMEZONE).date().isoformat(),
-                specialty=requested_specialty,
-                location_name=branch,
-                doctor_name=doctor_name,
-                limit=50,
-            )
+        date_label = date_start.astimezone(CLINIC_TIMEZONE).strftime("%A, %B %d")
         if not slots:
             specialty_label = f" for {requested_specialty}" if requested_specialty else ""
             return {
                 "intent": "faq_response",
+                "availability_context": None,
                 "latest_agent_speech": (
-                    f"I couldn't find active appointment openings{specialty_label} on "
-                    f"{date_start.astimezone(CLINIC_TIMEZONE).strftime('%A, %B %d')}. "
+                    f"I couldn't find active appointment openings{specialty_label} on {date_label}. "
                     "Would you like me to check another date?"
                 ),
             }
-        date_label = date_start.astimezone(CLINIC_TIMEZONE).strftime("%A, %B %d")
-        opening_list = "; ".join(
-            f"{slot['doctor_name']} at {_clean_loc(slot['location_name'])} at {_format_slot_time_str(slot['start_time'])}"
-            for slot in slots[:8]
+        period = period_from_request(user_speech, requested_window, requested_time)
+        speech, offered, asks_period = day_availability_speech(
+            slots,
+            day_label=date_label,
+            period=period if requested_time is None else None,
+            exact_time=requested_time,
         )
-        if requested_time is not None or requested_window is not None:
-            availability_lead = (
-                "That time isn't available, but other doctors/openings on that date are: "
-                if no_exact_time_match else
-                "For that date and time, matching appointment openings are: "
-            )
-            return {
-                "intent": "faq_response",
-                "latest_agent_speech": (
-                    f"For {date_label}, {availability_lead}{opening_list}. "
-                    "Would you like to book one?"
-                ),
-            }
-        return {
-            "intent": "faq_response",
-            "latest_agent_speech": (
-                f"On {date_label}, these doctors have appointment openings: {opening_list}. "
-                "Would you like to book one?"
-            ),
-        }
+        doctors_in_answer = {slot["doctor_name"] for slot in slots}
+        context = {
+            "doctor": next(iter(doctors_in_answer)) if len(doctors_in_answer) == 1 else None,
+            "location": branch,
+            "specialty": requested_specialty,
+            "date": local_day.isoformat(),
+        } if asks_period else None
+        return {"intent": "faq_response", "availability_context": context, "latest_agent_speech": speech}
 
     if not requested_specialty:
         if any(term in lower for term in (
@@ -243,81 +214,29 @@ async def _handle_doctor_availability_query(
     }
 
 
-async def _handle_branch_query(db: AsyncSession, lower: str) -> Optional[Dict[str, Any]]:
-    """Grounded query for branch counts and locations to prevent unnecessary LLM or identity gating."""
-    mentions_branches = any(term in lower for term in ("branch", "branches", "location", "locations"))
-    asks_branch_count = mentions_branches and any(
-        phrase in lower for phrase in ("how many", "number of", "count of", "total")
-    )
-    asks_branch_locations = mentions_branches and any(
-        term in lower for term in ("where", "located", "address", "location", "locations", "area", "list")
-    )
-    asks_for_branch_list = mentions_branches and any(
-        phrase in lower for phrase in (
-            "which branches", "what branches", "what are your branches",
-            "list branches", "branches do you have", "tell me about your branches",
+def _repeat_response(state: CallState) -> Dict[str, Any]:
+    """Patient did not understand the assistant: say the last message again, without changing flow state."""
+    last = (state.get("latest_agent_speech") or "").strip()
+    if not last:
+        return {
+            "intent": "faq_response",
+            "latest_agent_speech": "Sorry about that. How can I help you today? You can say book, reschedule, cancel, or ask about the clinic.",
+        }
+    if last == state.get("last_repeat_speech"):
+        # Repeating did not help; offer simpler ways forward instead of looping.
+        speech = (
+            "I'm sorry for the confusion. You can tell me in a few words what you need, such as book, "
+            "reschedule or cancel, or say front desk and I'll have our team help you directly."
         )
-    )
-    asks_generic_branch_question = mentions_branches and (
-        "?" in lower
-        or any(phrase in lower for phrase in ("tell me", "show me", "list the", "list our"))
-    ) and not any(
-        action in lower for action in (
-            "book", "booking", "appointment", "schedule", "reschedule", "cancel",
-        )
-    )
-    asks_clinic_location = (
-        "clinic" in lower or "where are you" in lower or "where is your clinic" in lower
-    ) and any(term in lower for term in ("where", "located", "address", "location", "area"))
-
-    if not (
-        asks_branch_count
-        or asks_branch_locations
-        or asks_for_branch_list
-        or asks_generic_branch_question
-        or asks_clinic_location
-    ):
-        return None
-
-    locations = list(
-        (await db.scalars(
-            select(Location)
-            .where(Location.is_active.is_(True))
-            .order_by(Location.name)
-        )).all()
-    )
-    branch_names = [
-        location.name.removesuffix(" Branch")
-        for location in locations
-    ]
-    if asks_branch_count:
-        if branch_names:
-            answer = (
-                f"City Care Clinic has {len(branch_names)} branches: "
-                f"{', '.join(branch_names)}."
-            )
-        else:
-            answer = "I can't retrieve the clinic's branch list right now. Please try again shortly."
-    elif asks_branch_locations or asks_clinic_location:
-        address_lines = [
-            f"{location.name.removesuffix(' Branch')}: {location.address}"
-            for location in locations
-            if location.address
-        ]
-        if address_lines:
-            answer = "Our branch locations are: " + "; ".join(address_lines) + "."
-        elif branch_names:
-            answer = (
-                "Our branches are " + ", ".join(branch_names)
-                + ", but I don't have their street addresses available right now."
-            )
-        else:
-            answer = "I can't retrieve the clinic's branch addresses right now. Please try again shortly."
-    elif branch_names:
-        answer = "City Care Clinic has branches in " + ", ".join(branch_names) + "."
     else:
-        answer = "I can't retrieve the clinic's branch list right now. Please try again shortly."
-    return {"intent": "faq_response", "latest_agent_speech": answer}
+        speech = f"Sorry about that, let me say it again. {last}"
+    return {"intent": "faq_response", "latest_agent_speech": speech, "last_repeat_speech": speech}
+
+
+def _ordinal(n: int) -> str:
+    if 11 <= n % 100 <= 13:
+        return f"{n}th"
+    return {1: f"{n}st", 2: f"{n}nd", 3: f"{n}rd"}.get(n % 10, f"{n}th")
 
 
 async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, Any]:
@@ -348,10 +267,16 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
         or state.get("awaiting_preferred_date")
     )
     parsed_preference_date, _ = parse_date_query_to_range(user_speech)
+    explicit_cancel = bool(re.search(
+        r"\b(?:just\s+)?canc(?:el|le|ell)(?:ed|ing)?(?:\s+(?:my|the|this|his|her))?\s+(?:appointment|it|that)\b",
+        lower,
+    ))
     if (
         reschedule_date_context
         and parsed_preference_date is not None
         and has_date_reference(user_speech)
+        and not explicit_cancel
+        and not is_emergency_report(user_speech)
     ):
         return {"intent": "reschedule"}
 
@@ -394,6 +319,22 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
             "is_completed": True,
         }
 
+    # We just told the patient which parts of the day have openings; they now pick one.
+    ctx = state.get("availability_context")
+    if ctx and len(user_speech.split()) <= 6 and (
+        period_from_request(user_speech, _extract_time_window(user_speech), _extract_time_of_day(user_speech))
+    ) and not has_date_reference(user_speech):
+        who = " ".join(part for part in (ctx.get("doctor"), ctx.get("location"), ctx.get("specialty")) if part)
+        answer = await _handle_doctor_availability_query(
+            db, user_speech=f"{who} on {ctx['date']} {user_speech}".strip()
+        )
+        answer["availability_context"] = answer.get("availability_context")
+        return answer
+
+    # "I couldn't understand you" / "repeat that": answer it directly, keeping the flow state intact.
+    if is_repeat_request(user_speech) and not is_emergency_report(user_speech):
+        return _repeat_response(state)
+
     # Follow-up booking must be anchored to a completed visit, not treated as
     # an ordinary new consultation. All channel adapters share this state path.
     asks_followup_booking = bool(
@@ -411,6 +352,7 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
                 "awaiting_followup_decision": False,
                 "awaiting_followup_visit": False,
                 "followup_candidates": [],
+                "awaiting_preferred_date": True,
                 "latest_agent_speech": "Certainly. Which clinic branch or doctor would you prefer, and what date works best?",
             }
         if is_explicit_rejection(user_speech):
@@ -543,30 +485,22 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
     # Cancellation confirmation gate
     if (
         state.get("awaiting_cancel_confirmation")
-        and "are you sure you want to cancel" in last_agent_speech
         and (is_explicit_confirmation(user_speech) or is_explicit_rejection(user_speech))
     ):
         return {"intent": "cancel"}
 
     # Reschedule vs cancel ambiguity resolution
-    explicit_cancel = bool(re.search(
-        r"\b(?:just\s+)?cancel(?:\s+(?:my|the|this|his|her))?\s+(?:appointment|it|that)\b",
-        lower,
-    ))
     asks_reschedule = any(phrase in lower for phrase in (
         "reschedule", "move appointment", "change appointment", "another doctor",
         "different doctor", "other doctor", "switch doctor", "change doctor",
     ))
     if state.get("awaiting_change_action_choice"):
         if explicit_cancel or lower.strip() in {"cancel", "cancel it", "just cancel"}:
-            return {"intent": "cancel", "awaiting_change_action_choice": False}
+            return {"intent": "cancel", "awaiting_change_action_choice": False, "awaiting_cancel_confirmation": False}
         if asks_reschedule:
-            return {"intent": "reschedule", "awaiting_change_action_choice": False}
-        return {
-            "intent": "faq_response",
-            "awaiting_change_action_choice": True,
-            "latest_agent_speech": "Would you like me to reschedule your existing appointment with another doctor, or cancel it completely?",
-        }
+            return {"intent": "reschedule", "awaiting_change_action_choice": False, "awaiting_cancel_confirmation": False}
+        # Anything else is interpreted by the LLM classifier below, which is
+        # told the assistant is waiting for a reschedule-or-cancel choice.
 
     if explicit_cancel and asks_reschedule:
         return {
@@ -591,9 +525,9 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
         ):
             return {"intent": "reschedule"}
         hour_options = (
-            f"{number}:00 AM, {number}:00 PM, or the {number}th day of the month"
+            f"{number}:00 AM, {number}:00 PM, or the {_ordinal(int(number))} day of the month"
             if 1 <= int(number) <= 12
-            else f"the {number}th day of the month or a time written with AM or PM"
+            else f"the {_ordinal(int(number))} day of the month or a time written with AM or PM"
         )
         return {
             "intent": "faq_response",
@@ -675,11 +609,14 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
     # Bare patient name during unverified state
     name_words = lower.rstrip(".!?").split()
     non_name_terms = {"book", "appointment", "schedule", "doctor", "cancel", "reschedule", "change", "help", "yes", "no", "hello", "hi"}
+    if not state.get("is_verified") and is_name_correction(user_speech):
+        return {"intent": "identity"}
+    introduced_name = name_from_speech(user_speech)
     if (
         not state.get("is_verified")
-        and is_name_only_candidate(user_speech)
-        and not any(word in non_name_terms for word in name_words)
-        and re.fullmatch(r"[a-z][a-z'’-]*(?:\s+[a-z][a-z'’-]*){0,3}[.!?]?", lower)
+        and introduced_name
+        and not any(word in non_name_terms for word in introduced_name.lower().split())
+        and re.fullmatch(r"[a-z][a-z'’-]*(?:\s+[a-z][a-z'’-]*){0,3}", introduced_name.lower())
     ):
         return {"intent": "identity"}
 
@@ -717,13 +654,21 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
     if state.get("awaiting_preferred_date") and not state.get("target_slot_id") and not is_explicit_confirmation(user_speech) and not is_explicit_rejection(user_speech):
         parsed_date, _ = parse_date_query_to_range(user_speech)
         has_time = _extract_time_of_day(user_speech) is not None or _extract_time_window(user_speech) is not None
-        has_branch = any(branch in lower for branch in (
-            "t nagar", "t. nagar", "tnagar", "anna nagar", "annanagar", "velachery", "tambaram",
-        ))
-        has_doctor = any(doctor in lower for doctor in (
-            "arjun", "ashwin", "lakshmi", "rajesh", "sandeep", "harish", "priya", "shalini",
-            "nithya", "karthik", "suresh", "meera", "divya", "vivek", "deepa", "ananya",
-        ))
+        location_names = (await db.execute(
+            select(Location.name).where(Location.is_active.is_(True))
+        )).scalars().all()
+        provider_names = (await db.execute(
+            select(Provider.full_name).where(Provider.is_active.is_(True))
+        )).scalars().all()
+        has_branch = bool(_match_branch(user_speech)) or any(
+            n.removesuffix(" Branch").lower() in lower for n in location_names
+        )
+        has_doctor = bool(_match_doctor(user_speech)) or any(
+            part in lower
+            for name in provider_names
+            for part in re.sub(r"^dr\.?\s+", "", name.lower()).split()
+            if len(part) > 2
+        )
         asks_for_options = any(phrase in lower for phrase in (
             "alternative", "another slot", "other slot", "different time", "different date",
             "morning", "afternoon", "evening",
@@ -745,6 +690,7 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
     # Active reschedule prompt check
     asked_reschedule_active = has_active_appt and (
         "reschedule that appointment" in last_agent_speech
+        or "would you like to reschedule it" in last_agent_speech
         or "allows one active" in last_agent_speech
         or "reschedule that appointment instead" in last_agent_speech
     )
@@ -754,19 +700,20 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
                 "intent": "close",
                 "latest_agent_speech": "You're very welcome! I am always here to help. Your appointment remains confirmed. Have a wonderful day!",
             }
-        if any(w in lower for w in ("no", "nope", "don't", "do not", "keep", "leave it")):
-            return {
-                "intent": "faq_response",
-                "latest_agent_speech": "No problem. Your current appointment remains unchanged. How else can I help?",
-            }
-        if any(w in lower for w in ("yes", "sure", "okay", "ok", "please reschedule", "reschedule it", "move it", "change it")):
-            return {"intent": "reschedule"}
-        if explicit_cancel:
+        # Only a bare yes/no answer is handled here. Anything else (including
+        # "cancel it", "book another doctor", typos) goes to the LLM classifier
+        # with the recent dialogue so the reply is understood, not keyword-matched.
+        if explicit_cancel and not asks_reschedule:
             return {"intent": "cancel"}
-        return {
-            "intent": "faq_response",
-            "latest_agent_speech": "Your current appointment is unchanged. Would you like to reschedule it, or can I help with something else?",
-        }
+        if not explicit_cancel and not asks_reschedule:
+            if is_explicit_rejection(user_speech):
+                return {
+                    "intent": "faq_response",
+                    "latest_agent_speech": "No problem. Your current appointment remains unchanged. How else can I help?",
+                }
+            if re.fullmatch(r"(?:yes|yeah|yep|yup|sure|okay|ok)\b[\s,.!]*(?:please)?[\s.!]*", lower.strip()) \
+                    or is_explicit_confirmation(user_speech):
+                return {"intent": "reschedule"}
 
     # Doctor browsing follow-up: filter by branch
     if state.get("intent") == "faq_response" and state.get("preferred_specialty"):
@@ -834,6 +781,14 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
         context_parts.append("The patient was asked to provide identity details, but may still ask clinic questions or request a staff handoff.")
     if current_intent:
         context_parts.append(f"Current intent: {current_intent}.")
+    if state.get("awaiting_change_action_choice"):
+        context_parts.append("The assistant just asked whether to reschedule the existing appointment or cancel it.")
+    if state.get("awaiting_cancel_confirmation"):
+        context_parts.append("The assistant just asked the patient to confirm cancelling their appointment.")
+    if state.get("awaiting_preferred_date"):
+        context_parts.append("The assistant is waiting for the patient's preferred date, time, branch or doctor.")
+    if asked_reschedule_active:
+        context_parts.append("The assistant just told the patient they already have an active appointment and offered to reschedule it. Only a yes/no-style reply answers that offer; classify any other request (for example booking a different specialty) on its own meaning.")
     recent_dialogue = _recent_dialogue_context(state, user_speech)
     if recent_dialogue:
         context_parts.append("Recent dialogue (PII redacted):\n" + recent_dialogue)
@@ -859,6 +814,9 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
             ),
             "is_completed": True,
         }
+
+    if classification.intent == IntentLabel.REPEAT:
+        return _repeat_response(state)
 
     # Ground model-extracted entities before any entity can affect availability
     # queries or booking state. Dates/times must parse from this utterance;
@@ -953,7 +911,11 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
         classification.intent = IntentLabel.GENERAL_CONSULTATION
         classification.confidence = "medium"
         classification.needs_clarification = False
-    elif mentions_symptom and any(term in lower for term in medical_advice_terms):
+    elif (
+        mentions_symptom
+        and classification.intent in (IntentLabel.UNKNOWN, IntentLabel.GENERAL_CONSULTATION)
+        and any(term in lower for term in medical_advice_terms)
+    ):
         classification.intent = IntentLabel.MEDICAL_ADVICE
         classification.confidence = "medium"
         classification.needs_clarification = False
@@ -1022,7 +984,7 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
                 ("Gynecology", ("period", "menstrual", "pregnan", "pelvic", "vaginal")),
                 ("Pediatrics", ("my child", "my baby", "my son", "my daughter", "for my child")),
             )
-            suggested_specialty = next(
+            suggested_specialty = classification.entities.specialty or next(
                 (
                     specialty for specialty, cues in specialty_cues
                     if any(cue in lower for cue in cues)
@@ -1071,9 +1033,6 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
 
     # Rule: General FAQ
     if classification.intent == IntentLabel.FAQ:
-        branch_result = await _handle_branch_query(db, lower)
-        if branch_result is not None:
-            return branch_result
         return {"intent": "faq"}
 
     # Rule: Cancellation request (Application code verifies identity & confirms)

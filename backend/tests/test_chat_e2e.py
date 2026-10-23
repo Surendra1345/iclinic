@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from src.api.rest.app import create_app
 from src.config.settings import settings
 from src.control.agents.nodes.detect_intent import intent_classification_service
-from src.services.intent_classification_service import IntentClassificationResult, IntentLabel
+from src.core.services.intent_classification_service import IntentClassificationResult, IntentLabel
 
 
 if "test" not in settings.DATABASE_URL.lower():

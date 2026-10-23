@@ -3,49 +3,16 @@ import re
 from datetime import datetime
 from typing import Optional
 
-from src.control.agents.tools.appointment_time import CLINIC_TIMEZONE, format_appointment_time
-
-BRANCH_ALIASES = {
-    "Anna Nagar": ["anna nagar", "annanagar"],
-    "T. Nagar": ["t nagar", "t. nagar", "tnagar", "t.nagar"],
-    "Velachery": ["velachery"],
-    "Tambaram": ["tambaram"],
-}
-
-DOCTOR_MAP = {
-    "Dr. Arjun Reddy": ["arjun reddy", "arjun"],
-    "Dr. Rajesh Kannan": ["rajesh kannan", "rajesh"],
-    "Dr. Shalini Sundaram": ["shalini sundaram", "shalini"],
-    "Dr. Meera Krishnan": ["meera krishnan", "meera"],
-    "Dr. Ashwin Balaji": ["ashwin balaji", "ashwin"],
-    "Dr. Priya Nair": ["priya nair", "priya"],
-    "Dr. Karthik Subramanian": ["karthik subramanian", "karthik"],
-    "Dr. Deepa Venkat": ["deepa venkat", "deepa"],
-    "Dr. Sandeep Kumar": ["sandeep kumar", "sandeep"],
-    "Dr. Ananya Iyer": ["ananya iyer", "ananya"],
-    "Dr. Suresh Chandran": ["suresh chandran", "suresh"],
-    "Dr. Divya Rangarajan": ["divya rangarajan", "divya"],
-    "Dr. Vivek Sharma": ["vivek sharma", "vivek"],
-    "Dr. Lakshmi Narayanan": ["lakshmi narayanan", "lakshmi"],
-    "Dr. Harish Gautham": ["harish gautham", "harish"],
-    "Dr. Nithya Raman": ["nithya raman", "nithya"],
-}
-
+from src.control.agents.tools import clinic_directory
+from src.utils.text import short_branch_name
+from src.utils.appointment_time import CLINIC_TIMEZONE, format_appointment_time
 
 def _match_branch(text: str) -> Optional[str]:
-    lower = text.lower()
-    for branch, aliases in BRANCH_ALIASES.items():
-        if any(alias in lower for alias in aliases):
-            return branch
-    return None
+    return clinic_directory.match_branch(text)
 
 
 def _match_doctor(text: str) -> Optional[str]:
-    lower = text.lower()
-    for doc, aliases in DOCTOR_MAP.items():
-        if any(alias in lower for alias in aliases):
-            return doc
-    return None
+    return clinic_directory.match_doctor(text)
 
 
 def _format_slot_time_str(start_time_iso: str) -> str:
@@ -65,9 +32,7 @@ def _clean_slot_time(start_time_iso: str) -> str:
 
 
 def _clean_loc(loc_name: Optional[str]) -> str:
-    if not loc_name:
-        return "clinic"
-    return loc_name.replace(" Branch", "").replace(" branch", "").strip()
+    return short_branch_name(loc_name)
 
 
 EMAIL_REGEX = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,7}\b")
@@ -159,7 +124,7 @@ def _extract_time_window(text: str) -> Optional[tuple[tuple[int, int], tuple[int
     if re.search(r"\b(afternoon|in the afternoon)\b", lower):
         return (12, 0), (16, 59)
     if re.search(r"\b(evening|in the evening)\b", lower):
-        return (17, 0), (17, 59)
+        return (17, 0), (20, 59)
     match = re.search(
         r"\b(?:(?:between|from)\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:and|to|until|-)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b",
         lower,

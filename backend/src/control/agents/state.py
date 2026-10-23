@@ -25,6 +25,8 @@ class CallState(TypedDict, total=False):
     # One of: "book", "reschedule", "cancel", "faq", "handoff", "unknown", "greet", "identity", "register", "close"
     intent: Optional[str]
     semantic_label: Optional[str]
+    last_repeat_speech: Optional[str]
+    availability_context: Optional[Dict[str, Any]]
 
     # ── Dialogue / LLM Context ────────────────────────────────────────────────
     messages: List[Dict[str, str]]  # list of {"role": "user"|"assistant"|"system", "content": "..."}

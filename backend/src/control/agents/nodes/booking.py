@@ -14,10 +14,11 @@ from src.control.agents.tools.slot_tools import (
     parse_date_query_to_range, has_date_reference, release_slot, reserve_slot,
 )
 from src.config.settings import settings
-from src.control.agents.tools.appointment_time import CLINIC_TIMEZONE
+from src.utils.appointment_time import CLINIC_TIMEZONE
 from src.control.agents.tools.registration_tools import is_closing_or_thanks
 from src.data.repositories.conversation_repository import ConversationRepository
-from src.data.repositories.slot_repository import SlotUnavailableError
+from src.core.exceptions import SlotUnavailableError
+from src.control.agents.tools import clinic_directory
 from src.control.agents.nodes.booking_helpers import (
     _clean_loc, _clean_slot_time, _extract_name_and_email, _extract_time_of_day,
     _extract_time_window, _format_slot_time_str, _match_branch, _match_doctor,
@@ -212,17 +213,14 @@ async def booking_agent_node(state: CallState, db: AsyncSession) -> Dict[str, An
         spec = state.get("preferred_specialty")
         if spec:
             avail_branches = get_branches_for_specialty(spec)
-            if len(avail_branches) > 1:
-                branch_str = ", ".join(avail_branches[:-1]) + f", and {avail_branches[-1]}"
-            else:
-                branch_str = avail_branches[0] if avail_branches else "our other"
+            branch_str = clinic_directory.join_names(avail_branches) or "our other"
             speech = (
-                f"City Care Clinic has four branches in Chennai: Anna Nagar, T. Nagar, Velachery, and Tambaram. "
+                f"{clinic_directory.branches_sentence()} "
                 f"For {spec}, doctors are available at our {branch_str} branches. Which branch would you prefer?"
             )
         else:
             speech = (
-                "City Care Clinic has four branches in Chennai: Anna Nagar, T. Nagar, Velachery, and Tambaram. "
+                f"{clinic_directory.branches_sentence()} "
                 "Which branch or doctor would you prefer?"
             )
         return {

@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.control.agents.tools.appointment_time import CLINIC_TIMEZONE, format_appointment_time
+from src.utils.appointment_time import CLINIC_TIMEZONE, format_appointment_time
 from src.data.repositories.appointment_repository import AppointmentRepository
 
 

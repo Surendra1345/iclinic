@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.config.settings import settings
 from src.constants.enums import NotificationChannel, NotificationStatus
 from src.data.repositories.notification_repository import NotificationRepository
-from src.services.twilio_service import TwilioService
+from src.handlers.http_clients.twilio_service import TwilioService
 
 logger = logging.getLogger(__name__)
 

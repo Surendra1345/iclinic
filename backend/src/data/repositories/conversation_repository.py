@@ -214,6 +214,15 @@ class ConversationRepository:
         )
         await self.db.commit()
 
+    async def mark_ended(self, conversation_id: uuid.UUID) -> None:
+        """Stamp the end time only, keeping the outcome and state already recorded."""
+        await self.db.execute(
+            update(Conversation)
+            .where(Conversation.id == conversation_id)
+            .values(ended_at=datetime.utcnow(), updated_at=datetime.utcnow())
+        )
+        await self.db.commit()
+
     async def close(
         self,
         conversation_id: uuid.UUID,

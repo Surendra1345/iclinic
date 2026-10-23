@@ -30,12 +30,14 @@ from src.control.agents.nodes import (
     start_conversation_node,
 )
 from src.control.agents.state import CallState
+from src.control.agents.tools.clinic_directory import ensure_directory
 
 
 def _wrap_with_db(node_fn: Callable) -> Callable:
     """Injects the request-scoped database session from RunnableConfig into the node."""
     async def wrapped(state: CallState, config: RunnableConfig) -> Dict[str, Any]:
         db = config.get("configurable", {}).get("db")
+        await ensure_directory(db)  # read-only refresh of branch/doctor names
         return await node_fn(state, db)
     return wrapped
 

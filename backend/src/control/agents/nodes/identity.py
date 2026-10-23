@@ -12,7 +12,9 @@ from src.control.agents.tools.identity_tools import lookup_by_phone, verify_pati
 from src.control.agents.tools.registration_tools import (
     is_closing_or_thanks,
     is_greeting,
+    is_name_correction,
     is_name_only_candidate,
+    name_from_speech,
     validate_dob,
 )
 from src.control.agents.tools.booking_tools import check_patient_active_appointment
@@ -66,6 +68,13 @@ def _extract_name_and_dob_from_speech(text: str) -> tuple[Optional[str], Optiona
     return name, parsed_dob
 
 
+_NAME_CORRECTION_STRIP = re.compile(
+    r"\b(?:(?:this|that|it)(?: is|'s| was)? not my name|not my name|wrong name|that(?:'s| is) wrong|"
+    r"(?:that|this)(?: is|'s) not me|that name is wrong|isn't my name|is not my name)\b",
+    re.IGNORECASE,
+)
+
+
 async def identity_agent_node(state: CallState, db: AsyncSession) -> Dict[str, Any]:
     # If already verified on an earlier turn, pass through
     if state.get("is_verified"):
@@ -114,7 +123,7 @@ async def identity_agent_node(state: CallState, db: AsyncSession) -> Dict[str, A
             "patient_email": None,
             "patient_phone": None,
             "awaiting_identity_verification": False,
-            "latest_agent_speech": "Welcome to City Care Clinic! Could you please tell me your full name to start registration?",
+            "latest_agent_speech": f"Welcome to {settings.CLINIC_NAME}! Could you please tell me your full name to start registration?",
         }
 
     # Do not keep collecting registration data when the patient says they
@@ -146,9 +155,30 @@ async def identity_agent_node(state: CallState, db: AsyncSession) -> Dict[str, A
             extracted_name = state.get("patient_name")
             extracted_dob = parsed_dob
 
+    # "This is not my name": drop the captured name (and any DOB) and take the corrected one.
+    if is_name_correction(user_speech):
+        remainder = _NAME_CORRECTION_STRIP.sub(" ", user_speech)
+        corrected = name_from_speech(re.sub(r"^[\s,.\-]*(?:(?:no|nope|but|actually|sorry)\b[\s,.\-]*)*", "", remainder, flags=re.IGNORECASE))
+        if corrected:
+            return {
+                "patient_name": corrected,
+                "patient_dob": None,
+                "verify_attempts": 0,
+                "awaiting_identity_verification": True,
+                "pending_intent": state.get("pending_intent") or "book",
+                "latest_agent_speech": f"Sorry about that, {corrected.split()[0]}. Please provide your date of birth to verify your identity.",
+            }
+        return {
+            "patient_name": None,
+            "patient_dob": None,
+            "verify_attempts": 0,
+            "awaiting_identity_verification": True,
+            "latest_agent_speech": "Sorry about that. Could you please tell me your full name again?",
+        }
+
     # Preserve a name supplied on its own and ask for DOB on the next turn.
     if not extracted_dob and is_name_only_candidate(user_speech):
-        name = user_speech.rstrip(".!?").strip().title()
+        name = name_from_speech(user_speech) or user_speech.rstrip(".!?").strip().title()
         return {
             "patient_name": name,
             "awaiting_identity_verification": True,

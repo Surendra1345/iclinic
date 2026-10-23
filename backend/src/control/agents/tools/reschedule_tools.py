@@ -3,7 +3,7 @@ import uuid
 from typing import Any, Dict, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.services.appointment_service import AppointmentService
+from src.core.services.appointment_service import AppointmentService
 
 
 async def reschedule_appointment(

@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     VOICE_ASSISTANT_TTS_ENABLED: bool = os.getenv(
         "VOICE_ASSISTANT_TTS_ENABLED", "true"
     ).lower() == "true"
+    GEMINI_FALLBACK_MODEL: str = os.getenv("GEMINI_FALLBACK_MODEL", "")
+    GEMINI_RETRY_DELAY_SECONDS: float = float(os.getenv("GEMINI_RETRY_DELAY_SECONDS", "0.5"))
+    GEMINI_QUOTA_CIRCUIT_SECONDS: float = float(os.getenv("GEMINI_QUOTA_CIRCUIT_SECONDS", "900"))
+    GEMINI_CIRCUIT_SECONDS: float = float(os.getenv("GEMINI_CIRCUIT_SECONDS", "60"))
+    GEMINI_STRUCTURED_TIMEOUT_SECONDS: float = float(os.getenv("GEMINI_STRUCTURED_TIMEOUT_SECONDS", "3"))
+    GEMINI_DISABLE_THINKING: bool = os.getenv("GEMINI_DISABLE_THINKING", "true").lower() in {"1", "true", "yes"}
+    GEMINI_ANSWER_MAX_TOKENS: int = int(os.getenv("GEMINI_ANSWER_MAX_TOKENS", "200"))
+    GEMINI_TIMEOUT_SECONDS: float = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "5"))
     VOICE_ASSISTANT_TRANSLATION_TIMEOUT_SECONDS: float = float(
         os.getenv("VOICE_ASSISTANT_TRANSLATION_TIMEOUT_SECONDS", "12")
     )
@@ -96,6 +104,7 @@ class Settings(BaseSettings):
     # ── Misc ──────────────────────────────────────────────────────────────
     APP_ENV: str = os.getenv("APP_ENV", "development")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+    LOG_FORMAT: str = os.getenv("LOG_FORMAT", "text")
 
 
 settings = Settings()

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.control.agents.tools.appointment_time import CLINIC_TIMEZONE
+from src.utils.appointment_time import CLINIC_TIMEZONE
 from src.control.agents.tools.slot_tools import get_slots_by_date_and_criteria, get_slots_by_doctor, get_slots_by_location, get_slots_by_specialty_and_location, release_slot, reserve_slot
 from src.control.agents.nodes.booking_helpers import _clean_loc, _clean_slot_time, _extract_name_and_email, _extract_time_of_day, _format_slot_time_str, _match_branch
 from src.control.agents.nodes._booking_execution import _execute_booking
@@ -249,7 +249,7 @@ async def handle_held_slot(
             # 5b. Patient asks about clinic branch / address of currently offered slot
             if any(w in lower_speech for w in ["where is", "location of", "what is the address", "address of", "which area"]):
                 loc_name = target_slot.get("location_name") or "clinic"
-                loc_addr = target_slot.get("location_address") or "Chennai"
+                loc_addr = target_slot.get("location_address") or ""
                 doc_name = target_slot.get("doctor_name", "The doctor")
                 addr_phrase = f" at {loc_addr}" if loc_addr else ""
                 speech = (

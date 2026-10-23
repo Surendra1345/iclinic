@@ -16,13 +16,14 @@ from src.config.settings import settings
 from src.control.agents.tools.registration_tools import is_greeting
 from src.data.clients.postgres import AsyncSessionLocal
 from src.data.repositories.conversation_repository import ConversationRepository
-from src.services.gemini_service import GeminiService
-from src.services.sarvam_service import SarvamService
-from src.services.conversation_turn_service import conversation_turn_service
-from src.services.audio_storage_service import audio_storage_service
+from src.handlers.http_clients.gemini_service import GeminiService
+from src.handlers.http_clients.sarvam_service import SarvamService
+from src.core.services.conversation_turn_service import conversation_turn_service
+from src.handlers.http_clients.audio_storage_service import audio_storage_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/voice-assistant", tags=["Browser Voice Assistant"])
+from src.schemas.voice import TTSRequest
 sarvam_service = SarvamService()
 gemini_service = GeminiService()
 _SUPPORTED_LANGUAGES = {"en-IN", "ta-IN", "te-IN"}
@@ -293,7 +294,7 @@ async def process_voice_turn(
             "pending_intent": saved_details.get("pending_intent"),
             "intent": saved_details.get("intent"),
             "preferred_language": language,
-            "language_confirmed": True,
+            "language_confirmed": confidence >= settings.VOICE_ASSISTANT_LANGUAGE_CONFIDENCE_THRESHOLD,
             "language_confidence": confidence,
         }
         for field in (
@@ -341,7 +342,7 @@ async def process_voice_turn(
                     conversation_id=existing_conversation.id,
                     thread_id=session_id,
                     channel="voice_assistant",
-                    patient_text=transcript,
+                    patient_text=agent_input,
                     patient_message_saved=True,
                     input_state=input_state,
                     response_transform=lambda text: _translate(text, language),
@@ -409,11 +410,6 @@ async def process_voice_turn(
         "target_slot": result.get("target_slot_details"),
         "booking_confirmed": result.get("booking_confirmed", False),
     }
-
-
-class TTSRequest(BaseModel):
-    text: str
-    language: Optional[str] = "en-IN"
 
 
 @router.post("/tts")

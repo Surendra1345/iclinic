@@ -4,7 +4,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 # pyrefly: ignore[missing-import]
 from sqlalchemy import select
 # pyrefly: ignore[missing-import]
@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.control.agents.state import CallState
 from src.control.agents.tools.booking_tools import check_patient_active_appointment
 from src.control.agents.tools.reschedule_tools import reschedule_appointment
-from src.control.agents.nodes.booking_helpers import _extract_time_window, _match_doctor
+from src.control.agents.tools import clinic_directory
+from src.control.agents.tools.slot_speech import day_availability_speech, period_from_request
+from src.control.agents.nodes.booking_helpers import _extract_time_of_day, _extract_time_window, _match_branch, _match_doctor
 from src.control.agents.nodes.dialogue_guardrails import (
     is_explicit_confirmation,
     is_explicit_rejection,
@@ -60,42 +62,6 @@ def _slot_date_time_list(slots: list[Dict[str, Any]]) -> str:
         _local_slot_datetime(slot).strftime("%A, %B %d at %I:%M %p").replace(" at 0", " at ")
         for slot in slots
     )
-
-
-def _extract_time_of_day(text: str) -> Optional[Tuple[int, int]]:
-    """Extract requested time of day from speech. Returns (hour_24, minute)."""
-    lower = text.lower().strip()
-    m1 = re.search(r"\b(\d{1,2}):(\d{2})\s*(am|pm)?\b", lower)
-    if m1:
-        hr = int(m1.group(1))
-        mn = int(m1.group(2))
-        meridiem = m1.group(3)
-        if meridiem == "pm" and hr < 12:
-            hr += 12
-        elif meridiem == "am" and hr == 12:
-            hr = 0
-        elif not meridiem and 1 <= hr <= 6:
-            hr += 12
-        return hr, mn
-
-    m2 = re.search(r"\b(\d{1,2})\s*(am|pm)\b", lower)
-    if m2:
-        hr = int(m2.group(1))
-        meridiem = m2.group(2)
-        if meridiem == "pm" and hr < 12:
-            hr += 12
-        elif meridiem == "am" and hr == 12:
-            hr = 0
-        return hr, 0
-
-    m3 = re.search(r"\bat\s+(\d{1,2})\b", lower)
-    if m3:
-        hr = int(m3.group(1))
-        if 1 <= hr <= 6:
-            hr += 12
-        return hr, 0
-
-    return None
 
 
 async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str, Any]:
@@ -163,17 +129,7 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
     if asks_another_doctor:
         if target_slot_id:
             await release_slot(target_slot_id, db)
-        requested_branch = next(
-            (
-                loc for loc, aliases in {
-                    "Anna Nagar": ("anna nagar", "annanagar"),
-                    "T. Nagar": ("t nagar", "t. nagar", "tnagar"),
-                    "Velachery": ("velachery",),
-                    "Tambaram": ("tambaram",),
-                }.items() if any(alias in user_speech for alias in aliases)
-            ),
-            current_loc,
-        )
+        requested_branch = _match_branch(raw_speech) or current_loc
         slots = await get_slots_by_specialty_and_location(
             current_spec, requested_branch, db, limit=50
         ) if current_spec and requested_branch else []
@@ -360,9 +316,9 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
             await release_slot(target_slot_id, db)
         spec = current_spec or "General Medicine"
         avail_branches = get_branches_for_specialty(spec)
-        branch_str = ", ".join(avail_branches[:-1]) + f", and {avail_branches[-1]}" if len(avail_branches) > 1 else (avail_branches[0] if avail_branches else "our other")
+        branch_str = clinic_directory.join_names(avail_branches) or "our other"
         speech = (
-            f"City Care Clinic has four branches in Chennai: Anna Nagar, T. Nagar, Velachery, and Tambaram. "
+            f"{clinic_directory.branches_sentence()} "
             f"For {spec}, doctors are available at our {branch_str} branches. Which branch would you prefer?"
         )
         return {
@@ -373,19 +329,7 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
         }
 
     # 6. Parse specific location or doctor mentioned by user
-    requested_location = next(
-        (
-            loc
-            for loc, aliases in {
-                "Anna Nagar": ("anna nagar", "annanagar"),
-                "T. Nagar": ("t nagar", "t. nagar", "tnagar"),
-                "Velachery": ("velachery",),
-                "Tambaram": ("tambaram",),
-            }.items()
-            if any(alias in user_speech for alias in aliases)
-        ),
-        None,
-    )
+    requested_location = _match_branch(raw_speech)
 
     requested_doctor = _match_doctor(raw_speech)
 
@@ -520,27 +464,22 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
                 date_slots = matching
             else:
                 day_label = requested_local_date.strftime("%A, %B %d")
-                req_str = (
-                    f"between {req_window[0][0]:02d}:{req_window[0][1]:02d} and {req_window[1][0]:02d}:{req_window[1][1]:02d}"
-                    if req_window
-                    else f"{req_hr:02d}:{req_mn:02d}"
+                speech, offered, _ = day_availability_speech(
+                    date_slots,
+                    day_label=day_label,
+                    period=period_from_request(raw_speech, req_window, None) if not req_time else None,
+                    exact_time=req_time,
+                    closing="Which would you prefer?",
                 )
-                alt_times = [
-                    datetime.fromisoformat(s["start_time"]).astimezone(CLINIC_TIMEZONE).strftime("%I:%M %p").lstrip("0")
-                    for s in date_slots[:4]
-                ]
                 return {
                     "target_slot_id": None,
                     "target_slot_details": None,
-                    "offered_slots": date_slots[:4],
+                    "offered_slots": offered[:6],
                     "awaiting_preferred_date": True,
                     "preferred_doctor": effective_doctor,
                     "preferred_location": requested_location or current_loc,
                     "preferred_specialty": current_spec,
-                    "latest_agent_speech": (
-                        f"I don't have an opening around {req_str} with {effective_doctor} on {day_label}, "
-                        f"but other available times on that day are {', '.join(alt_times)}. Which would you prefer?"
-                    ),
+                    "latest_agent_speech": speech,
                 }
 
         if not date_slots:

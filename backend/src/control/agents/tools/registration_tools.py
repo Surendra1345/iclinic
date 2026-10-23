@@ -287,9 +287,37 @@ _NON_NAME_WORDS = {
 }
 
 
+_NAME_INTRO = re.compile(
+    r"^(?:(?:hello|hi|hey|yes|yeah|okay|ok|sure)[\s,!.]*)?"
+    r"(?:my (?:full )?name is|my name's|name is|i am|i'm|im|this is|it is|it's|its|call me|they call me|you can call me)\s+",
+    re.IGNORECASE,
+)
+_NAME_CORRECTION = re.compile(
+    r"\b(?:(?:this|that|it)(?: is|'s| was)? not my name|not my name|wrong name|that(?:'s| is) wrong|"
+    r"(?:that|this)(?: is|'s) not me|that name is wrong|isn't my name|is not my name)\b",
+    re.IGNORECASE,
+)
+
+
+def strip_name_intro(text: str) -> str:
+    """'My name is Sonia' -> 'Sonia'."""
+    return _NAME_INTRO.sub("", (text or "").strip(), count=1).strip()
+
+
+def is_name_correction(text: str) -> bool:
+    """The patient says the name we captured is wrong ("this is not my name")."""
+    return bool(_NAME_CORRECTION.search(text or ""))
+
+
+def name_from_speech(text: str) -> Optional[str]:
+    """A bare name, with or without an introduction ("Sonia", "my name is Sonia"); else None."""
+    cleaned = strip_name_intro(text)
+    return re.sub(r"[.!?,;:]+$", "", cleaned).strip().title() if is_name_only_candidate(cleaned) else None
+
+
 def is_name_only_candidate(text: str) -> bool:
     """Accept only short, name-like replies; reject ordinary phrases and requests."""
-    cleaned = re.sub(r"[.!?,;:]+$", "", (text or "").strip())
+    cleaned = re.sub(r"[.!?,;:]+$", "", strip_name_intro(text or ""))
     words = cleaned.split()
     if not 1 <= len(words) <= 4 or is_invalid_name(cleaned):
         return False

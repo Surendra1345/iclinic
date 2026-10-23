@@ -14,12 +14,8 @@ from src.data.models.postgres.appointment import Appointment
 from src.data.models.postgres.appointment_cancellation import AppointmentCancellation
 from src.data.models.postgres.appointment_reschedule import AppointmentReschedule
 from src.data.models.postgres.conversation import Conversation
+from src.core.exceptions import AppointmentServiceError
 from src.data.models.postgres.slot import Slot
-
-
-class AppointmentServiceError(Exception):
-    """Base exception for appointment service operations."""
-    pass
 
 
 class AppointmentService:

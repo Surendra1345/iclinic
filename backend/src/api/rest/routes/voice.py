@@ -28,10 +28,10 @@ from src.data.models.postgres.outbound_call_request import OutboundCallRequest
 from src.data.repositories.conversation_repository import ConversationRepository
 from src.data.repositories.outbound_call_repository import OutboundCallRepository
 from src.data.repositories.patient_repository import PatientRepository
-from src.services.sarvam_service import SarvamService
-from src.services.conversation_turn_service import conversation_turn_service
-from src.services.twilio_service import TwilioService
-from src.services.audio_storage_service import audio_storage_service
+from src.handlers.http_clients.sarvam_service import SarvamService
+from src.core.services.conversation_turn_service import conversation_turn_service
+from src.handlers.http_clients.twilio_service import TwilioService
+from src.handlers.http_clients.audio_storage_service import audio_storage_service
 from src.observability.context import call_id_context
 
 logger = logging.getLogger(__name__)
@@ -289,16 +289,7 @@ def normalize_phone(phone: Optional[str]) -> str:
 
 # ?????? 2. Outbound Call Trigger Router (POST /api/calls/trigger) ??????????????????????????????????????????????????????
 calls_router = APIRouter(prefix="/api", tags=["Outbound Calls"])
-
-
-class TriggerCallRequest(BaseModel):
-    """Request body for starting an outbound patient call."""
-
-    to_phone: str = Field(
-        ...,
-        description="Patient phone number. Use E.164 format, for example +919876543210.",
-        examples=["+919876543210"],
-    )
+from src.schemas.calls import TriggerCallRequest
 
 
 @calls_router.post("/calls/trigger")

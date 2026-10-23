@@ -1,17 +1,19 @@
 """Slot discovery and reservation tools."""
 import uuid
+from src.config.settings import settings
+from src.control.agents.tools import clinic_directory
 from typing import Any, Dict, List, Optional
 # pyrefly: ignore[missing-import]
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.data.repositories.slot_repository import SlotRepository
-from src.control.agents.tools.appointment_time import CLINIC_TIMEZONE, format_appointment_time
+from src.utils.appointment_time import CLINIC_TIMEZONE, format_appointment_time
 
 
 def _format_slot(slot) -> Dict[str, Any]:
     doctor_name = slot.provider.full_name if slot.provider else "Doctor"
     specialty = slot.provider.specialty if slot.provider else "General"
-    location_name = slot.provider.location.name if (slot.provider and slot.provider.location) else "City Care Clinic"
+    location_name = slot.provider.location.name if (slot.provider and slot.provider.location) else settings.CLINIC_NAME
     location_address = slot.provider.location.address if (slot.provider and slot.provider.location) else ""
     start_dt = slot.start_time
     formatted_time = format_appointment_time(start_dt)
@@ -61,69 +63,19 @@ async def get_slots_by_specialty_and_location(specialty: str, location_name: str
     return [_format_slot(s) for s in slots]
 
 
-BRANCH_SPECIALTIES = {
-    "Anna Nagar": ["General Medicine", "Cardiology", "Dermatology", "Pediatrics"],
-    "T. Nagar": ["General Medicine", "Dermatology", "Orthopedics", "Gynecology"],
-    "Velachery": ["Cardiology", "Gynecology", "Orthopedics", "Pediatrics"],
-    "Tambaram": ["ENT", "General Medicine", "Cardiology", "Dermatology"],
-}
-
-
 def get_specialties_for_branch(branch_name: str) -> List[str]:
-    """Returns list of specialties available at a given branch."""
-    clean_target = branch_name.lower().replace(".", "").replace(" ", "")
-    for b_name, specs in BRANCH_SPECIALTIES.items():
-        clean_branch = b_name.lower().replace(".", "").replace(" ", "")
-        if clean_branch in clean_target or clean_target in clean_branch:
-            return specs
-    return []
+    """Specialties available at a branch, read from the clinic directory (DB-backed)."""
+    return clinic_directory.specialties_for_branch(branch_name)
 
 
 def get_branches_for_specialty(specialty: str) -> List[str]:
-    """Returns list of clinic branches that offer a given specialty."""
-    target = specialty.lower().strip()
-    res = []
-    for b_name, specs in BRANCH_SPECIALTIES.items():
-        if any(s.lower() == target or target in s.lower() or s.lower() in target for s in specs):
-            res.append(b_name)
-    return res
+    """Branches that offer a given specialty, read from the clinic directory (DB-backed)."""
+    return clinic_directory.branches_for_specialty(specialty)
 
 
 def get_branch_doctors_info(branch_name: str) -> Dict[str, Any]:
-    """Returns the doctors and specialties for a specific clinic branch."""
-    branch_doctors = {
-        "Anna Nagar": [
-            {"name": "Dr. Arjun Reddy", "specialty": "General Medicine"},
-            {"name": "Dr. Rajesh Kannan", "specialty": "Cardiology"},
-            {"name": "Dr. Shalini Sundaram", "specialty": "Dermatology"},
-            {"name": "Dr. Meera Krishnan", "specialty": "Pediatrics"},
-        ],
-        "T. Nagar": [
-            {"name": "Dr. Ashwin Balaji", "specialty": "General Medicine"},
-            {"name": "Dr. Priya Nair", "specialty": "Dermatology"},
-            {"name": "Dr. Karthik Subramanian", "specialty": "Orthopedics"},
-            {"name": "Dr. Deepa Venkat", "specialty": "Gynecology"},
-        ],
-        "Velachery": [
-            {"name": "Dr. Sandeep Kumar", "specialty": "Cardiology"},
-            {"name": "Dr. Ananya Iyer", "specialty": "Gynecology"},
-            {"name": "Dr. Suresh Chandran", "specialty": "Orthopedics"},
-            {"name": "Dr. Divya Rangarajan", "specialty": "Pediatrics"},
-        ],
-        "Tambaram": [
-            {"name": "Dr. Vivek Sharma", "specialty": "ENT"},
-            {"name": "Dr. Lakshmi Narayanan", "specialty": "General Medicine"},
-            {"name": "Dr. Harish Gautham", "specialty": "Cardiology"},
-            {"name": "Dr. Nithya Raman", "specialty": "Dermatology"},
-        ],
-    }
-    clean_target = branch_name.lower().replace(".", "").replace(" ", "")
-    for b_name, docs in branch_doctors.items():
-        clean_branch = b_name.lower().replace(".", "").replace(" ", "")
-        if clean_branch in clean_target or clean_target in clean_branch:
-            return {"branch": b_name, "doctors": docs}
-    return {"branch": "All Branches", "doctors": []}
-
+    """Doctors and specialties for a branch, read from the clinic directory (DB-backed)."""
+    return clinic_directory.branch_doctors(branch_name)
 
 
 def parse_date_query_to_range(date_text: str):

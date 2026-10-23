@@ -25,23 +25,37 @@ src/
 ├── main.py                          # Service application entrypoint
 ├── api/
 │   ├── rest/                        # FastAPI REST API
-│   │   ├── app.py                   # FastAPI application instance
+│   │   ├── app.py                   # FastAPI application instance (CORS, error handling, metrics)
 │   │   ├── dependencies.py          # Route dependencies (e.g., DBSessionDep)
-│   │   └── routes/                  # API endpoints (calls, bookings, webhooks, media_ws)
-│   └── middleware/                  # CORS, logging, error handling
+│   │   └── routes/
+│   │       ├── voice.py             # Outbound calls & Twilio voice webhooks
+│   │       ├── voice_assistant.py   # Browser voice assistant (STT / TTS)
+│   │       └── dashboard.py         # Patient chat & dashboard endpoints
+│   └── middleware/
+│       └── correlation.py           # Request / call correlation IDs
 ├── config/
 │   └── settings.py                  # Environment & DB settings via Pydantic
 ├── constants/
 │   └── enums.py                     # PostgreSQL Enum definitions
 ├── core/
-│   ├── exceptions/                  # Domain exceptions (SlotTaken, IdentityFailed, etc.)
-│   └── services/                    # Business services (identity, slot, booking, call)
+│   ├── exceptions/                  # Domain exceptions (ClinicError, AppointmentServiceError, SlotUnavailableError)
+│   ├── services/                    # Business services
+│   │   ├── appointment_service.py        # Atomic book / reschedule / cancel
+│   │   ├── conversation_turn_service.py  # Shared per-turn runner for chat, voice and calls
+│   │   ├── intent_classification_service.py # Gemini intent classification with offline fallback
+│   │   ├── medical_safety_service.py     # Emergency detection
+│   │   └── notification_service.py       # SMS / email confirmations and front-desk alerts
+│   └── scheduler.py                 # Background jobs (outbound retries, call reconciliation, slot-hold cleanup)
 ├── control/
-│   └── agents/                      # AI Voice Booking Agent & tool definitions
+│   └── agents/                      # AI Voice & Chat Booking Agent
+│       ├── graph.py, edges.py       # LangGraph workflow and routing
+│       ├── state.py, prompts.py     # Conversation state and prompts
+│       ├── nodes/                   # Intent detection, identity, booking, reschedule, cancel, FAQ, handoff
+│       └── tools/                   # Slot, booking, identity and clinic-directory tools
 ├── data/
 │   ├── clients/
 │   │   └── postgres.py              # Async SQLAlchemy engine & session factory
-│   ├── models/postgres/             # SQLAlchemy ORM models (10 tables + mixins)
+│   ├── models/postgres/             # SQLAlchemy ORM models (12 tables + mixins)
 │   │   ├── base.py                  # AuditMixin (id, created_at, updated_at, created_by, updated_by)
 │   │   ├── location.py              # Locations
 │   │   ├── provider.py              # Healthcare Providers (Doctors)
@@ -52,15 +66,24 @@ src/
 │   │   ├── outbound_call_request.py # Queued outbound call jobs
 │   │   ├── outbound_call.py         # Outbound telephony call attempts
 │   │   ├── appointment.py           # Booked Appointments
+│   │   ├── appointment_cancellation.py # Cancellation audit log
+│   │   ├── appointment_reschedule.py   # Reschedule audit log
 │   │   └── notification.py          # Patient notifications (SMS / Email)
 │   ├── repositories/                # Data access layer
-│   └── migrations/                  # Alembic migration environment and versions
+│   ├── migrations/                  # Alembic migration environment and versions
+│   └── seed.py                      # Clinic, doctor and patient seed data
 ├── handlers/
-│   └── http_clients/                # Telephony (Twilio), STT, TTS, LLM (OpenAI), SMS
+│   └── http_clients/                # External providers
+│       ├── gemini_service.py        # Google Gemini LLM (retry, backup model)
+│       ├── sarvam_service.py        # Speech-to-text, text-to-speech, translation
+│       ├── twilio_service.py        # Telephony and SMS (Twilio)
+│       └── audio_storage_service.py # Generated audio storage
 ├── observability/
-│   └── logging/                     # Structured JSON logging
-├── schemas/                         # Pydantic request / response schemas
-└── utils/                           # Shared utilities
+│   ├── logging/                     # Logging setup (text or JSON via LOG_FORMAT) with request / call IDs
+│   ├── context.py                   # Request and call context
+│   └── metrics.py                   # Prometheus metrics
+├── schemas/                         # Pydantic request schemas (dashboard, calls, voice)
+└── utils/                           # Shared helpers (appointment time, branch names, PII redaction)
 ```
 
 ---

@@ -18,7 +18,7 @@ from sqlalchemy import text
 from src.config.settings import settings
 from src.api.middleware.correlation import CorrelationMiddleware
 from src.data.clients.postgres import AsyncSessionLocal
-from src.observability.logging_config import configure_logging
+from src.observability.logging import configure_logging
 from src.observability.metrics import database_operation_duration_seconds
 
 logger = logging.getLogger(__name__)
@@ -144,7 +144,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Not found")
         if not hmac.compare_digest(x_diagnostics_key, configured_key):
             raise HTTPException(status_code=404, detail="Not found")
-        from src.services.intent_classification_service import intent_classification_service
+        from src.core.services.intent_classification_service import intent_classification_service
         return intent_classification_service.get_latency_stats()
 
     return app
