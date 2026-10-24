@@ -1,5 +1,4 @@
 import React, { useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
 import {
   Search,
   RefreshCw,
@@ -13,32 +12,17 @@ import {
 } from 'lucide-react'
 import { Card } from '../../../components/ui/Card'
 import { Input } from '../../../components/ui/Input'
-import { Button } from '../../../components/ui/Button'
 import { StatusBadge } from './StatusBadge'
 import { usePatients } from '../queries/frontdeskQueries'
 import { formatDateTime, formatPhone } from '../../../lib/utils'
+import { RefreshButton } from './RefreshButton'
 
 export const PatientsTable: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('')
-  const [isManualRefreshing, setIsManualRefreshing] = useState(false)
-  const queryClient = useQueryClient()
 
-  const { data, isLoading, refetch } = usePatients(
+  const { data, isLoading, refetch, dataUpdatedAt } = usePatients(
     searchQuery.trim() || undefined
   )
-
-  const handleRefresh = async () => {
-    setIsManualRefreshing(true)
-    try {
-      await Promise.all([
-        refetch(),
-        queryClient.invalidateQueries({ queryKey: ['dashboard', 'patients'] }),
-        queryClient.invalidateQueries({ queryKey: ['dashboard', 'stats'] }),
-      ])
-    } finally {
-      setTimeout(() => setIsManualRefreshing(false), 500)
-    }
-  }
 
   const patients = data?.patients || []
 
@@ -58,21 +42,12 @@ export const PatientsTable: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 w-full sm:w-auto">
-            <Button
-              type="button"
-              variant="outline"
-              size="md"
-              className="w-full sm:w-auto h-10 text-xs justify-center"
-              onClick={handleRefresh}
-              disabled={isManualRefreshing}
-              leftIcon={
-                <RefreshCw
-                  className={`w-3.5 h-3.5 ${isManualRefreshing ? 'animate-spin' : ''}`}
-                />
-              }
-            >
-              {isManualRefreshing ? 'Refreshing...' : 'Refresh Patients'}
-            </Button>
+            <RefreshButton
+              label="Refresh Patients"
+              className="w-full sm:w-auto"
+              updatedAt={dataUpdatedAt}
+              onRefresh={() => refetch()}
+            />
           </div>
         </div>
       </Card>

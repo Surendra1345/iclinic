@@ -7,20 +7,30 @@ import {
   Calendar,
   Users,
   AlertTriangle,
+  LogOut,
+  MessageSquare,
 } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import { authService } from '../auth/authService'
 import { MetricsCards } from './components/MetricsCards'
 import { AppointmentsTable } from './components/AppointmentsTable'
 import { PatientsTable } from './components/PatientsTable'
 import { ForwardedRequestsTable } from './components/ForwardedRequestsTable'
+import { ConversationsTable } from './components/ConversationsTable'
 import { LocationRoster } from './components/LocationRoster'
 import { Badge } from '../../components/ui/Badge'
 import { ENV } from '../../config/env'
 import { useDashboardStats } from './queries/frontdeskQueries'
 
 export const FrontdeskPage: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'appointments' | 'patients' | 'forwarded'>('appointments')
+  const [activeTab, setActiveTab] = useState<'appointments' | 'patients' | 'conversations' | 'forwarded'>('appointments')
   const { data: stats } = useDashboardStats()
+  const navigate = useNavigate()
+
+  const handleLogout = () => {
+    authService.logout()
+    navigate('/frontdesk/login', { replace: true })
+  }
 
   return (
     <div className="min-h-screen bg-[#F6F9FB] text-[#0F172A] selection:bg-[#CCFBF1] selection:text-[#0D9488]">
@@ -59,6 +69,15 @@ export const FrontdeskPage: React.FC = () => {
               <ArrowLeft className="w-3.5 h-3.5 text-[#0D9488]" />
               <span>Patient Experience</span>
             </Link>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="flex items-center gap-1.5 text-xs font-semibold text-[#475569] hover:text-[#E11D48] px-3.5 py-2 rounded-xl bg-white border border-[#E2E8F0] hover:border-[#FECDD3] transition-all shadow-sm cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Log out</span>
+            </button>
           </div>
         </div>
       </header>
@@ -134,6 +153,19 @@ export const FrontdeskPage: React.FC = () => {
 
             <button
               type="button"
+              onClick={() => setActiveTab('conversations')}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all cursor-pointer ${
+                activeTab === 'conversations'
+                  ? 'bg-[#0F766E] text-white shadow-sm'
+                  : 'text-[#475569] hover:text-[#0F172A] hover:bg-white'
+              }`}
+            >
+              <MessageSquare className="w-4 h-4" />
+              <span>Conversations</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setActiveTab('forwarded')}
               className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all relative cursor-pointer ${
                 activeTab === 'forwarded'
@@ -169,6 +201,18 @@ export const FrontdeskPage: React.FC = () => {
                 </span>
               </div>
               <AppointmentsTable />
+            </div>
+          ) : activeTab === 'conversations' ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-[#0F172A] tracking-tight">
+                  Conversation Records
+                </h2>
+                <span className="text-xs text-[#64748B]">
+                  Chat, voice, and outbound call transcripts with state timeline and step log
+                </span>
+              </div>
+              <ConversationsTable />
             </div>
           ) : activeTab === 'patients' ? (
             <div className="space-y-3">

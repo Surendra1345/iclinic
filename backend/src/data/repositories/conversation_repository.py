@@ -1,6 +1,6 @@
 """Conversation repository — manage conversation lifecycle and message history."""
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 # pyrefly: ignore[missing-import]
 from sqlalchemy import select, update
@@ -89,7 +89,10 @@ class ConversationRepository:
             return
         values: dict[str, Any] = {"updated_at": datetime.utcnow()}
         history = list(convo.state_history or [])
-        if state is not None and convo.current_state != state:
+        keep_confirmation = (
+            convo.current_state == ConversationState.CONFIRMATION_SENT and state == ConversationState.BOOKED
+        )
+        if state is not None and convo.current_state != state and not keep_confirmation:
             values["current_state"] = state
             history.append({"state": state.value, "at": step["at"]})
             values["state_history"] = history
@@ -214,6 +217,24 @@ class ConversationRepository:
         )
         await self.db.commit()
 
+    async def record_confirmation_result(
+        self,
+        conversation_id: uuid.UUID,
+        status: ConfirmationStatusType,
+        delivered: bool,
+    ) -> None:
+        """Store how confirmation delivery went; when at least one message went out, log "confirmation sent"."""
+        convo = await self.db.get(Conversation, conversation_id)
+        if convo is None:
+            return
+        values: dict[str, Any] = {"confirmation_status": status, "updated_at": datetime.utcnow()}
+        if delivered and convo.current_state != ConversationState.CONFIRMATION_SENT:
+            history = list(convo.state_history or [])
+            history.append({"state": ConversationState.CONFIRMATION_SENT.value, "at": datetime.now(timezone.utc).isoformat()})
+            values.update(current_state=ConversationState.CONFIRMATION_SENT, state_history=history)
+        await self.db.execute(update(Conversation).where(Conversation.id == conversation_id).values(**values))
+        await self.db.commit()
+
     async def mark_ended(self, conversation_id: uuid.UUID) -> None:
         """Stamp the end time only, keeping the outcome and state already recorded."""
         await self.db.execute(
@@ -228,9 +249,14 @@ class ConversationRepository:
         conversation_id: uuid.UUID,
         outcome: OutcomeType,
         handoff_reason: Optional[str] = None,
-        confirmation_status: ConfirmationStatusType = ConfirmationStatusType.SENT,
+        confirmation_status: Optional[ConfirmationStatusType] = None,
     ) -> None:
-        """Mark a conversation as ended with final outcome."""
+        """Mark a conversation as ended with final outcome.
+
+        The confirmation status is only changed when one is given; it is recorded by the delivery step,
+        so closing a conversation never claims a confirmation was sent.
+        """
+        extra = {"confirmation_status": confirmation_status} if confirmation_status is not None else {}
         await self.db.execute(
             update(Conversation)
             .where(Conversation.id == conversation_id)
@@ -247,7 +273,7 @@ class ConversationRepository:
                 else ConversationState.ABANDONED,
                 outcome=outcome,
                 handoff_reason=handoff_reason,
-                confirmation_status=confirmation_status,
+                **extra,
             )
         )
         await self.db.commit()

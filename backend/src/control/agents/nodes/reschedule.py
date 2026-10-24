@@ -14,6 +14,7 @@ from src.control.agents.state import CallState
 from src.control.agents.tools.booking_tools import check_patient_active_appointment
 from src.control.agents.tools.reschedule_tools import reschedule_appointment
 from src.control.agents.tools import clinic_directory
+from src.utils.text import short_branch_name
 from src.control.agents.tools.slot_speech import day_availability_speech, period_from_request
 from src.control.agents.nodes.booking_helpers import _extract_time_of_day, _extract_time_window, _match_branch, _match_doctor
 from src.control.agents.nodes.dialogue_guardrails import (
@@ -28,7 +29,9 @@ from src.control.agents.tools.slot_tools import (
     get_slots_by_date_and_criteria,
     get_slots_by_location,
     get_slots_by_specialty_and_location,
+    discussed_date_range,
     parse_date_query_to_range,
+    refers_to_discussed_day,
     release_slot,
     reserve_slot,
 )
@@ -129,12 +132,16 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
     if asks_another_doctor:
         if target_slot_id:
             await release_slot(target_slot_id, db)
-        requested_branch = _match_branch(raw_speech) or current_loc
-        slots = await get_slots_by_specialty_and_location(
-            current_spec, requested_branch, db, limit=50
-        ) if current_spec and requested_branch else []
+        # Look at every branch unless the patient named one: the next available provider, not just the same branch.
+        requested_branch = _match_branch(raw_speech)
+        slots = await get_slots_by_date_and_criteria(
+            db, specialty=current_spec, location_name=requested_branch, limit=100
+        ) if current_spec else []
         alternatives = [slot for slot in slots if slot.get("doctor_name") != current_doc]
-        doctors = list(dict.fromkeys(slot["doctor_name"] for slot in alternatives))
+        doctors = list(dict.fromkeys(
+            f"{slot['doctor_name']} at {short_branch_name(slot.get('location_name'))}" for slot in alternatives
+        ))
+        where = f" at our {short_branch_name(requested_branch)} branch" if requested_branch else ""
         if doctors:
             return {
                 "target_slot_id": None,
@@ -145,8 +152,8 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
                 "preferred_doctor": None,
                 "awaiting_preferred_date": True,
                 "latest_agent_speech": (
-                    f"For {current_spec}, other doctors with openings at our "
-                    f"{requested_branch} branch are {', '.join(doctors)}. Which doctor would you prefer?"
+                    f"For {current_spec}, other doctors with openings{where} are {', '.join(doctors[:6])}. "
+                    "Which doctor would you prefer?"
                 ),
             }
         return {
@@ -155,16 +162,20 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
             "offered_slots": [],
             "preferred_specialty": current_spec,
             "preferred_location": None,
-            "preferred_doctor": None,
+            "preferred_doctor": current_doc,
             "awaiting_preferred_date": True,
             "latest_agent_speech": (
-                f"I couldn't find another {current_spec or 'specialist'} with an opening at our "
-                f"{requested_branch} branch. Which branch would you like me to check?"
+                f"I couldn't find another {current_spec or 'specialist'} with an opening{where}. "
+                "Would you like to keep your current doctor and choose a different date or time?"
             ),
         }
 
     req_time = _extract_time_of_day(user_speech)
     req_window = _extract_time_window(user_speech)
+    # A bare time ("the 3 o'clock slot") or "that day" refers to the date already
+    # being discussed, never to the date of the appointment being replaced.
+    if requested_start is None and (req_time or req_window or refers_to_discussed_day(raw_speech)):
+        requested_start, requested_end = discussed_date_range(state.get("preferred_date"))
     is_asking_alternative = any(
         phrase in user_speech
         for phrase in (
@@ -229,9 +240,22 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
                     f"{target_slot.get('formatted_speech')}."
                     f"{prep_note}"
                 )
+                # The appointment now sits in the new slot; later turns (cancel, another reschedule)
+                # must quote the new time, not the one that was just replaced.
+                moved_appointment = {
+                    **active_appt,
+                    **{
+                        key: target_slot[key]
+                        for key in ("doctor_name", "location_name", "specialty", "start_time", "formatted_speech")
+                        if key in target_slot
+                    },
+                    "slot_id": target_slot_id,
+                    "status": "rescheduled",
+                }
                 return {
                     "booking_confirmed": True,
                     "active_appointment_id": active_appt["appointment_id"],
+                    "active_appointment_details": moved_appointment,
                     # Keep the selected slot through the confirmation node so it
                     # reports the new time, not the stale active appointment time.
                     "target_slot_id": target_slot_id,
@@ -366,6 +390,7 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
             "target_slot_details": None,
             "offered_slots": [],
             "awaiting_preferred_date": True,
+            "preferred_date": None,
             "preferred_doctor": current_doc,
             "preferred_location": current_loc,
             "preferred_specialty": current_spec,
@@ -380,14 +405,17 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
     if offered_slots and not target_slot_id:
         if req_time or req_window:
             req_hr, req_mn = req_time or (None, None)
-            requested_start, requested_end = parse_date_query_to_range(raw_speech)
+            # Only pick from the offered list here; the day being discussed (requested_start) is kept
+            # for the date search below when the patient names a period such as "afternoon".
+            named_start, _ = parse_date_query_to_range(raw_speech)
+            match_start = named_start or requested_start
             chosen = None
             for slot in offered_slots:
                 slot_dt = datetime.fromisoformat(slot["start_time"])
                 if slot_dt.tzinfo is None:
                     slot_dt = slot_dt.replace(tzinfo=timezone.utc)
                 local_dt = slot_dt.astimezone(CLINIC_TIMEZONE)
-                requested_date = requested_start.astimezone(CLINIC_TIMEZONE).date() if requested_start else None
+                requested_date = match_start.astimezone(CLINIC_TIMEZONE).date() if match_start else None
                 requested_date_matches = requested_date is None or requested_date == local_dt.date()
                 if requested_date_matches and local_dt.hour == req_hr and abs(local_dt.minute - req_mn) <= 15:
                     chosen = slot
@@ -476,6 +504,7 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
                     "target_slot_details": None,
                     "offered_slots": offered[:6],
                     "awaiting_preferred_date": True,
+                    "preferred_date": date_query,
                     "preferred_doctor": effective_doctor,
                     "preferred_location": requested_location or current_loc,
                     "preferred_specialty": current_spec,
@@ -497,6 +526,7 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
                     "target_slot_details": None,
                     "offered_slots": alt_options,
                     "awaiting_preferred_date": True,
+                    "preferred_date": date_query,
                     "preferred_doctor": effective_doctor,
                     "preferred_location": requested_location or current_loc,
                     "preferred_specialty": current_spec,
@@ -510,6 +540,7 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
                 "target_slot_details": None,
                 "offered_slots": [],
                 "awaiting_preferred_date": True,
+                "preferred_date": date_query,
                 "preferred_doctor": effective_doctor,
                 "preferred_location": requested_location or current_loc,
                 "preferred_specialty": current_spec,
@@ -527,6 +558,7 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
                 "target_slot_details": chosen,
                 "offered_slots": [],
                 "awaiting_preferred_date": False,
+                "preferred_date": date_query,
                 "preferred_doctor": chosen["doctor_name"],
                 "preferred_location": chosen["location_name"],
                 "preferred_specialty": chosen.get("specialty", current_spec),
@@ -535,22 +567,22 @@ async def reschedule_agent_node(state: CallState, db: AsyncSession) -> Dict[str,
                 ),
             }
 
-        options = date_slots[:5]
-        times = _slot_time_list(options)
+        day_label = requested_local_date.strftime("%A, %B %d")
+        speech, offered, _ = day_availability_speech(
+            date_slots,
+            day_label=day_label,
+            closing="Which time would you prefer? I will ask you to confirm before changing the appointment.",
+        )
         return {
             "target_slot_id": None,
             "target_slot_details": None,
-            "offered_slots": options,
+            "offered_slots": offered,
             "awaiting_preferred_date": True,
+            "preferred_date": date_query,
             "preferred_doctor": effective_doctor,
             "preferred_location": requested_location or current_loc,
             "preferred_specialty": current_spec,
-            "latest_agent_speech": (
-                f"On {requested_local_date.strftime('%A, %B %d')}, {effective_doctor} at "
-                f"{(requested_location or current_loc or 'your selected branch').removesuffix(' Branch')} "
-                f"has these available times: {times}. Which time would you prefer? "
-                "I will ask you to confirm before changing the appointment."
-            ),
+            "latest_agent_speech": speech,
         }
 
     # "Alternative dates" means different calendar days, not more times on

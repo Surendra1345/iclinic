@@ -44,7 +44,7 @@ class AppointmentService:
         existing_appt = await self.db.scalar(
             select(Appointment).where(
                 Appointment.patient_id == patient_id,
-                Appointment.status == AppointmentStatus.BOOKED,
+                Appointment.status.in_((AppointmentStatus.BOOKED, AppointmentStatus.RESCHEDULED)),
             )
         )
         if existing_appt:

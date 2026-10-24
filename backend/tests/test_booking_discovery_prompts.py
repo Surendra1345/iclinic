@@ -152,7 +152,10 @@ def test_afternoon_after_morning_offer_searches_saved_date_and_preserves_afterno
             parsed_date_start=date(2026, 10, 30),
             alternative_date=None,
         )
-        assert all("morning-" in slot["slot_id"] for slot in initial_options["offered_slots"])
+        # A full day is summarised by time of day; every slot stays available to choose from.
+        assert len(initial_options["offered_slots"]) == 11
+        assert "morning" in initial_options["latest_agent_speech"]
+        assert "afternoon" in initial_options["latest_agent_speech"]
 
         afternoon_options = await _booking_discovery.discover_booking_slots(
             state={"awaiting_preferred_date": True, **initial_options},
@@ -166,7 +169,7 @@ def test_afternoon_after_morning_offer_searches_saved_date_and_preserves_afterno
             alternative_date=None,
         )
         assert all("afternoon-" in slot["slot_id"] for slot in afternoon_options["offered_slots"])
-        assert "within your preferred range" in afternoon_options["latest_agent_speech"]
+        assert "Dr. Lakshmi Narayanan" in afternoon_options["latest_agent_speech"]
 
         unavailable_430 = await _booking_discovery.discover_booking_slots(
             state={"awaiting_preferred_date": True, **afternoon_options},
@@ -183,8 +186,7 @@ def test_afternoon_after_morning_offer_searches_saved_date_and_preserves_afterno
 
     afternoon_options, unavailable_430 = asyncio.run(journey())
     assert "Friday, October 30" in afternoon_options["latest_agent_speech"]
-    assert "02:00 PM" in afternoon_options["latest_agent_speech"]
-    assert "04:00 PM" in afternoon_options["latest_agent_speech"]
+    assert "2:00, 2:30, 3:00, 3:30, 4:00 PM" in afternoon_options["latest_agent_speech"]
     assert all("afternoon-" in slot["slot_id"] for slot in unavailable_430["offered_slots"])
 
 

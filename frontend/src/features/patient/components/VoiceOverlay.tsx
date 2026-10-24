@@ -1,3 +1,4 @@
+import { formatClockIST } from '../../../lib/utils'
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Mic, MicOff, X, Volume2, Sparkles, AlertCircle } from 'lucide-react'
 import { Button } from '../../../components/ui/Button'
@@ -335,14 +336,14 @@ export const VoiceOverlay: React.FC<VoiceOverlayProps> = ({
         id: `u_${Date.now()}`,
         sender: 'patient',
         text: response.transcript,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: formatClockIST(),
       })
 
       const botMsg: ChatMessage = {
         id: `a_${Date.now()}`,
         sender: 'assistant',
         text: response.reply,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: formatClockIST(),
         targetSlot: response.target_slot,
         isConfirmed: response.booking_confirmed,
       }

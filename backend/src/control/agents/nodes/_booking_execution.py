@@ -27,6 +27,7 @@ async def _execute_booking(
     appointment_type_name: Optional[str],
     repo: ConversationRepository,
     db: AsyncSession,
+    reason: Optional[str] = None,
 ) -> Dict[str, Any]:
     try:
         # Ensure patient record exists (registration if not registered)
@@ -61,6 +62,7 @@ async def _execute_booking(
             conversation_id_str=convo_id,
             db=db,
             appointment_type_name=appointment_type_name,
+            reason=reason,
         )
         # Conversation state is persisted by the shared turn service after
         # this action succeeds. Avoid a mid-turn commit so cancellation rolls

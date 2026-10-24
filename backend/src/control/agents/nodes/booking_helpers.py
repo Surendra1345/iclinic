@@ -76,6 +76,12 @@ def _extract_time_of_day(text: str) -> Optional[tuple[int, int]]:
       'at 2' -> (14, 0)
     """
     lower = text.lower().strip()
+    # Speech-to-text often writes "nine thirty" as "930" or "1030". Accept that only when the whole reply is
+    # the number and the minutes are a real slot boundary, so years and other numbers are not read as times.
+    bare = re.fullmatch(r"(\d{1,2})(00|15|30|45)[\s.!]*", lower)
+    if bare and 1 <= int(bare.group(1)) <= 12:
+        hr, mn = int(bare.group(1)), int(bare.group(2))
+        return (hr + 12 if 1 <= hr <= 6 else hr), mn
     m1 = re.search(r"\b(\d{1,2}):(\d{2})\s*(am|pm)?\b", lower)
     if m1:
         hr = int(m1.group(1))

@@ -11,6 +11,7 @@ from src.control.agents.tools.slot_tools import (
     get_specialties_for_branch, get_branch_doctors_info, get_branches_for_specialty, reserve_slot,
 )
 from src.control.agents.tools import clinic_directory
+from src.control.agents.tools.slot_speech import day_availability_speech, local_dt as slot_local, period_from_request
 from src.control.agents.nodes.booking_helpers import _clean_loc, _clean_slot_time, _extract_time_of_day, _format_slot_time_str, _match_branch, _match_doctor
 
 
@@ -156,6 +157,34 @@ async def discover_booking_slots(
     # A non-date-specific offer is informational only. Hold a slot only after
     # the patient identifies one of the actual options by its time.
     offered_slots = state.get("offered_slots") or []
+    named_doctor = _match_doctor(user_speech)
+    if offered_slots and named_doctor and requested_time is None and requested_window is None and not has_date_in_speech:
+        by_doctor = [slot for slot in offered_slots if slot.get("doctor_name") == named_doctor]
+        if len(by_doctor) == 1:
+            chosen = by_doctor[0]
+            await reserve_slot(chosen["slot_id"], db)
+            return {
+                "target_slot_id": chosen["slot_id"],
+                "target_slot_details": chosen,
+                "offered_slots": [],
+                "preferred_doctor": chosen["doctor_name"],
+                "preferred_location": chosen["location_name"],
+                "preferred_specialty": chosen["specialty"],
+                "preferred_date": chosen["start_time"],
+                "awaiting_preferred_date": False,
+                "latest_agent_speech": f"I have tentatively held {_format_slot_time_str(chosen['start_time'])} with {chosen['doctor_name']} at {_clean_loc(chosen['location_name'])}. Shall I book it?",
+            }
+        if len(by_doctor) > 1:
+            first_day = slot_local(by_doctor[0]).strftime("%A, %B %d")
+            speech, kept, _ = day_availability_speech(by_doctor, day_label=first_day, closing="Which time would you like?")
+            return {
+                "offered_slots": kept,
+                "target_slot_id": None,
+                "target_slot_details": None,
+                "awaiting_preferred_date": True,
+                "preferred_doctor": named_doctor,
+                "latest_agent_speech": speech,
+            }
     if offered_slots and not has_date_in_speech and (requested_time is not None or requested_window is not None):
         matches = []
         for slot in offered_slots:
@@ -183,15 +212,21 @@ async def discover_booking_slots(
                 "latest_agent_speech": f"I have tentatively held {_format_slot_time_str(chosen['start_time'])} with {chosen['doctor_name']} at {_clean_loc(chosen['location_name'])}. Shall I book it?",
             }
         if len(matches) > 1:
-            labels = [_format_slot_time_str(s["start_time"]) for s in matches[:6]]
+            speech, kept, _ = day_availability_speech(
+                matches,
+                day_label=slot_local(matches[0]).strftime("%A, %B %d"),
+                exact_time=requested_time,
+                period=None if requested_time is not None else period_from_request(user_speech, requested_window, None),
+                closing="Which doctor would you like?",
+            )
             return {
-                "offered_slots": matches[:6],
+                "offered_slots": kept,
                 "target_slot_id": None,
                 "target_slot_details": None,
                 "awaiting_preferred_date": True,
-                "latest_agent_speech": (
-                    f"I found more than one matching option: {', '.join(labels)}. Which date and time do you mean?"
-                ),
+                # Keep the day under discussion so a follow-up such as "4:30" is searched on the same date.
+                "preferred_date": slot_local(matches[0]).date().isoformat(),
+                "latest_agent_speech": speech,
             }
         # A requested time range that is absent from the displayed list may
         # still be available later on that same date (for example, afternoon
@@ -201,7 +236,12 @@ async def discover_booking_slots(
     saved_preferred_date = state.get("preferred_date")
     has_saved_preferred_date = bool(
         state.get("awaiting_preferred_date")
-        and (requested_time is not None or requested_window is not None)
+        and (
+            requested_time is not None
+            or requested_window is not None
+            or _match_branch(user_speech)
+            or _match_doctor(user_speech)
+        )
         and saved_preferred_date
     )
     if state.get("awaiting_preferred_date") or has_date_in_speech or alternative_date:
@@ -262,7 +302,12 @@ async def discover_booking_slots(
                             requested_slots.append(s)
 
                     if not requested_slots:
-                        times = [_clean_slot_time(s["start_time"]) for s in slots[:6]]
+                        speech, kept, _ = day_availability_speech(
+                            slots,
+                            day_label=parsed_date_start.strftime("%A, %B %d"),
+                            period=period_from_request(user_speech, requested_window, None),
+                            closing="Which would you prefer?",
+                        )
                         return {
                             "target_slot_id": None,
                             "target_slot_details": None,
@@ -271,15 +316,16 @@ async def discover_booking_slots(
                             "preferred_location": loc,
                             "preferred_specialty": spec,
                             "preferred_date": parsed_date_start.isoformat(),
-                            "offered_slots": slots[:6],
-                            "latest_agent_speech": (
-                                f"I couldn't find an opening between {start_clock[0]:02d}:{start_clock[1]:02d} and "
-                                f"{end_clock[0]:02d}:{end_clock[1]:02d} on {parsed_date_start.strftime('%A, %B %d')}. "
-                                f"Other available times are {', '.join(times)}. Which would you prefer?"
-                            ),
+                            "offered_slots": kept,
+                            "latest_agent_speech": speech,
                         }
                     if len(requested_slots) > 1:
-                        times = [_clean_slot_time(s["start_time"]) for s in requested_slots[:6]]
+                        speech, kept, _ = day_availability_speech(
+                            requested_slots,
+                            day_label=parsed_date_start.strftime("%A, %B %d"),
+                            period=period_from_request(user_speech, requested_window, None),
+                            closing="Which one works best?",
+                        )
                         return {
                             "target_slot_id": None,
                             "target_slot_details": None,
@@ -288,11 +334,8 @@ async def discover_booking_slots(
                             "preferred_location": loc,
                             "preferred_specialty": spec,
                             "preferred_date": parsed_date_start.isoformat(),
-                            "offered_slots": requested_slots[:6],
-                            "latest_agent_speech": (
-                                f"I found these times within your preferred range on "
-                                f"{parsed_date_start.strftime('%A, %B %d')}: {', '.join(times)}. Which one works best?"
-                            ),
+                            "offered_slots": kept,
+                            "latest_agent_speech": speech,
                         }
                 elif requested_time is not None:
                     requested_slots = []
@@ -304,15 +347,13 @@ async def discover_booking_slots(
                         if (s_loc.hour, s_loc.minute) == requested_time:
                             requested_slots.append(s)
                     if not requested_slots:
-                        previously_offered_ids = {
-                            str(item.get("slot_id")) for item in offered_slots if item.get("slot_id")
-                        }
-                        alternatives = [
-                            slot for slot in slots
-                            if str(slot.get("slot_id")) in previously_offered_ids
-                        ] or slots
-                        times = [_clean_slot_time(s["start_time"]) for s in alternatives[:6]]
-                        requested = f"{requested_time[0]:02d}:{requested_time[1]:02d}"
+                        alternatives = slots   # the nearest times are worked out over the whole day
+                        speech, kept, _ = day_availability_speech(
+                            alternatives,
+                            day_label=parsed_date_start.strftime("%A, %B %d"),
+                            exact_time=requested_time,
+                            closing="Which would you prefer?",
+                        )
                         return {
                             "target_slot_id": None,
                             "target_slot_details": None,
@@ -321,15 +362,16 @@ async def discover_booking_slots(
                             "preferred_location": loc,
                             "preferred_specialty": spec,
                             "preferred_date": parsed_date_start.isoformat(),
-                            "offered_slots": alternatives[:6],
-                            "latest_agent_speech": (
-                                f"{requested} isn't available on {parsed_date_start.strftime('%A, %B %d')}. "
-                                f"Other available times are {', '.join(times)}. Which would you prefer?"
-                            ),
+                            "offered_slots": kept,
+                            "latest_agent_speech": speech,
                         }
 
                 if requested_time is None and requested_window is None:
-                    times = [_clean_slot_time(s["start_time"]) for s in slots[:6]]
+                    speech, kept, _ = day_availability_speech(
+                        slots,
+                        day_label=parsed_date_start.strftime("%A, %B %d"),
+                        closing="Which time would you like?",
+                    )
                     return {
                         "target_slot_id": None,
                         "target_slot_details": None,
@@ -338,11 +380,8 @@ async def discover_booking_slots(
                         "preferred_location": loc,
                         "preferred_specialty": spec,
                         "preferred_date": parsed_date_start.isoformat(),
-                        "offered_slots": slots[:6],
-                        "latest_agent_speech": (
-                            f"I found these available times on {parsed_date_start.strftime('%A, %B %d')}: "
-                            f"{', '.join(times)}. Which time would you like?"
-                        ),
+                        "offered_slots": kept,
+                        "latest_agent_speech": speech,
                     }
 
                 chosen_slot = requested_slots[0]

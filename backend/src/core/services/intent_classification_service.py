@@ -68,7 +68,7 @@ Classify the patient's message into exactly one of these predefined intents:
 - "reschedule": Patient wants to change, move, postpone, or adjust an existing appointment.
 - "cancel": Patient wants to cancel or drop an existing appointment.
 - "doctor_availability": Patient is asking which doctors, physicians, or specialists are available, working, or their schedule.
-- "faq": Inquiring about clinic hours, branch locations, addresses, contact information, or clinic services.
+- "faq": Any question about the clinic itself: hours, branch locations, addresses, contact information, services, appointment types, how long visits last, what to bring, booking, cancellation or rescheduling rules and policies (for example "can I book more than one appointment?"), when or what slots are generally open, and what the assistant can help with. A question about the rules of booking is faq, not book.
 - "handoff": Explicit request to speak to a human receptionist, staff member, operator, or front desk representative.
 - "general_consultation": Asking what a general consultation means, or reporting a symptom without asking for a booking or medical advice.
 - "medical_advice": Asking for diagnosis, medication, dosage, or treatment recommendations.
@@ -99,6 +99,10 @@ Examples:
 - "I have stomach pain" -> general_consultation; do not infer a booking request.
 - "forward this to frontdesk" -> handoff.
 - "what branches does the clinic have?" -> faq.
+- "what can you help me with?" -> faq.
+- "can I book more than one appointment at a time?" -> faq.
+- "what is your cancellation policy?" -> faq.
+- "do you have a dentist?" -> doctor_availability.
 - "which doctors are available for ENT?" -> doctor_availability.
 - "what are the doctors available for the general consultant?" -> doctor_availability, specialty="General Medicine".
 - "what are the doctors' advice for general medicine?" -> unknown, needs_clarification=true.
@@ -107,6 +111,21 @@ Examples:
 - "don't transfer me to the front desk" -> unknown, needs_clarification=true.
 - "I need to talk to a doctor" -> unknown, needs_clarification=true.
 """
+
+_TYPO_TARGETS = ("cancel", "reschedule", "appointment", "available", "doctor", "schedule")
+
+
+def _fix_typos(text: str) -> str:
+    """Correct near-misses of the key words ("cancle", "apointment") so offline matching still works."""
+    import difflib
+
+    fixed = []
+    for word in text.split():
+        bare = word.strip(".,!?")
+        match = difflib.get_close_matches(bare, _TYPO_TARGETS, n=1, cutoff=0.8) if len(bare) >= 5 else []
+        fixed.append(match[0] if match else word)
+    return " ".join(fixed)
+
 
 class IntentClassificationService:
     def __init__(self, gemini_service: Optional[GeminiService] = None) -> None:
@@ -261,7 +280,7 @@ class IntentClassificationService:
     def _fallback_heuristic_classify(self, text: str, reason: str = "fallback") -> IntentClassificationResult:
         """Deterministic fallback classifier when LLM API quota is exceeded or offline."""
         import re
-        lower = " ".join(text.lower().split())
+        lower = _fix_typos(" ".join(text.lower().split()))
         res: IntentClassificationResult
 
         # Strip explicitly negated actions before keyword fallback checks.
@@ -312,6 +331,18 @@ class IntentClassificationService:
                 confidence="medium",
                 needs_clarification=False,
                 reasoning="Fallback: detected handoff request",
+            )
+
+        if (
+            re.search(r"\b(?:book|schedule|(?:i|we) (?:need|want)|i'?d like|can i (?:get|have|make)|make an?|get an?)\b", lower)
+            and "appointment" in lower
+            and not re.search(r"\b(?:which|who|list|what)\b|\?", lower)
+        ):
+            return IntentClassificationResult(
+                intent=IntentLabel.BOOK,
+                confidence="medium",
+                needs_clarification=False,
+                reasoning="Fallback: explicit booking request",
             )
 
         # Conservative doctor availability fallback. A generic mention of

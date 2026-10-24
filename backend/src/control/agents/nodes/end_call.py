@@ -17,6 +17,7 @@ _FINAL_OUTCOMES = (
     OutcomeType.RESCHEDULED,
     OutcomeType.CANCELLED,
     OutcomeType.HANDED_TO_FRONT_DESK,
+    OutcomeType.WRONG_PERSON,
 )
 
 
@@ -34,6 +35,9 @@ async def end_call_node(state: CallState, db: AsyncSession) -> Dict[str, Any]:
                 # "thank you" must not turn it into "abandoned".
                 await repo.mark_ended(uuid.UUID(convo_id))
                 outcome = None
+            elif state.get("wrong_person"):
+                # Outbound call reached someone other than the patient: no booking, logged for follow-up.
+                outcome = OutcomeType.WRONG_PERSON
             elif action_confirmed and intent == "reschedule":
                 outcome = OutcomeType.RESCHEDULED
             elif action_confirmed and intent == "cancel":
@@ -49,7 +53,9 @@ async def end_call_node(state: CallState, db: AsyncSession) -> Dict[str, Any]:
             logger.error(f"Error closing conversation in DB: {e}")
 
     prev_speech = state.get("latest_agent_speech")
-    if prev_speech and any(
+    if state.get("wrong_person") and prev_speech:
+        speech = prev_speech
+    elif prev_speech and any(
         k in prev_speech.lower()
         for k in ["always here to help", "booked", "rescheduled", "cancelled", "confirmed"]
     ):

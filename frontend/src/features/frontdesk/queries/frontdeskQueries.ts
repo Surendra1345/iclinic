@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { frontdeskService } from '../services/frontdeskService'
+import { frontdeskService, type ConversationFilters } from '../services/frontdeskService'
 
 export const useDashboardStats = () => {
   return useQuery({
@@ -13,6 +13,14 @@ export const useAppointments = (filters: {
   status?: string
   location?: string
   search?: string
+  channel?: string
+  date_from?: string
+  date_to?: string
+  provider?: string
+  appointment_type?: string
+  confirmation_status?: string
+  sort?: string
+  order?: string
 }) => {
   return useQuery({
     queryKey: ['dashboard', 'appointments', filters],
@@ -59,5 +67,30 @@ export const useUpdateForwardedRequest = () => {
       queryClient.invalidateQueries({ queryKey: ['dashboard', 'forwarded_requests'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard', 'stats'] })
     },
+  })
+}
+
+export const useConversations = (filters: ConversationFilters) => {
+  return useQuery({
+    queryKey: ['dashboard', 'conversations', filters],
+    queryFn: () => frontdeskService.getConversations(filters),
+    refetchInterval: 5000,
+  })
+}
+
+export const useConversationDetail = (id: string | null) => {
+  return useQuery({
+    queryKey: ['dashboard', 'conversation', id],
+    queryFn: () => frontdeskService.getConversationDetail(id as string),
+    enabled: Boolean(id),
+    refetchInterval: 5000,
+  })
+}
+
+export const useAppointmentTypes = () => {
+  return useQuery({
+    queryKey: ['dashboard', 'appointment_types'],
+    queryFn: () => frontdeskService.getAppointmentTypes(),
+    staleTime: 1000 * 60,
   })
 }

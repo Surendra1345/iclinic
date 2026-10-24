@@ -1,3 +1,4 @@
+import { formatClockIST } from '../../lib/utils'
 import React, { useState, useRef, useEffect } from 'react'
 import {
   Bot,
@@ -19,6 +20,7 @@ import { VoiceOverlay } from './components/VoiceOverlay'
 import { useSendChatMessage } from './queries/patientQueries'
 import { ENV } from '../../config/env'
 import type { ChatMessage } from '../../types'
+import { QuickReplies } from './components/QuickReplies'
 
 export const ChatGPTStylePatientView: React.FC = () => {
   const [inputText, setInputText] = useState('')
@@ -43,7 +45,7 @@ export const ChatGPTStylePatientView: React.FC = () => {
       id: `u_${Date.now()}`,
       sender: 'patient',
       text,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timestamp: formatClockIST(),
     }
 
     setMessages((prev) => [...prev, userMsg])
@@ -63,9 +65,10 @@ export const ChatGPTStylePatientView: React.FC = () => {
         id: `a_${Date.now()}`,
         sender: 'assistant',
         text: response.reply,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: formatClockIST(),
         targetSlot: response.target_slot,
         isConfirmed: response.booking_confirmed,
+        slotOptions: response.slot_options,
       }
 
       setMessages((prev) => [...prev, botMsg])
@@ -74,7 +77,7 @@ export const ChatGPTStylePatientView: React.FC = () => {
         id: `err_${Date.now()}`,
         sender: 'assistant',
         text: 'I apologize, I encountered an issue contacting the scheduling server. Please try again or use the Call tag to receive a phone call.',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: formatClockIST(),
       }
       setMessages((prev) => [...prev, fallbackMsg])
     }
@@ -186,7 +189,7 @@ export const ChatGPTStylePatientView: React.FC = () => {
           ) : (
             /* Message Feed */
             <div className="space-y-6 pb-6">
-              {messages.map((msg) => (
+              {messages.map((msg, index) => (
                 <div
                   key={msg.id}
                   className={`flex items-start gap-3.5 ${
@@ -243,6 +246,13 @@ export const ChatGPTStylePatientView: React.FC = () => {
                         <span>Saved to clinic database.</span>
                       </div>
                     )}
+
+                    <QuickReplies
+                      options={msg.slotOptions}
+                      isLatest={index === messages.length - 1}
+                      disabled={chatMutation.isPending}
+                      onSelect={(message) => handleSendMessage(message)}
+                    />
                   </div>
 
                   {msg.sender === 'patient' && (

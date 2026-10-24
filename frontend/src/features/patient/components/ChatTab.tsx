@@ -7,6 +7,8 @@ import { PATIENT_PROMPT_PRESETS } from '../../../config/constants'
 import { useSendChatMessage } from '../queries/patientQueries'
 import { ENV } from '../../../config/env'
 import type { ChatMessage } from '../../../types'
+import { formatClockIST } from '../../../lib/utils'
+import { QuickReplies } from './QuickReplies'
 
 export const ChatTab: React.FC = () => {
   const [inputText, setInputText] = useState('')
@@ -17,7 +19,7 @@ export const ChatTab: React.FC = () => {
       id: 'welcome',
       sender: 'assistant',
       text: `Hello! Welcome to ${ENV.CLINIC_NAME}. How can I help you today? You can ask me to book, reschedule, cancel, or ask for available doctors and branches.`,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timestamp: formatClockIST(),
     },
   ])
   const [sessionId, setSessionId] = useState<string>(() => `chat_${crypto.randomUUID()}`)
@@ -37,7 +39,7 @@ export const ChatTab: React.FC = () => {
       id: `u_${Date.now()}`,
       sender: 'patient',
       text: message,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timestamp: formatClockIST(),
     }
 
     setMessages((prev) => [...prev, userMsg])
@@ -56,9 +58,10 @@ export const ChatTab: React.FC = () => {
         id: `a_${Date.now()}`,
         sender: 'assistant',
         text: response.reply,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: formatClockIST(),
         targetSlot: response.target_slot,
         isConfirmed: response.booking_confirmed,
+        slotOptions: response.slot_options,
       }
 
       setMessages((prev) => [...prev, botMsg])
@@ -67,7 +70,7 @@ export const ChatTab: React.FC = () => {
         id: `err_${Date.now()}`,
         sender: 'assistant',
         text: 'Sorry, I encountered an issue connecting to the scheduling system. Please verify the backend is active.',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: formatClockIST(),
       }
       setMessages((prev) => [...prev, errMsg])
     }
@@ -88,7 +91,7 @@ export const ChatTab: React.FC = () => {
         id: 'reset',
         sender: 'assistant',
         text: `Chat session reset. How can I assist you with your clinic visit?`,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: formatClockIST(),
       },
     ])
   }
@@ -139,7 +142,7 @@ export const ChatTab: React.FC = () => {
       {/* Chat Messages Container */}
       <Card glow="teal" className="p-4 sm:p-6 space-y-4">
         <div className="h-[420px] overflow-y-auto space-y-4 pr-1">
-          {messages.map((msg) => (
+          {messages.map((msg, index) => (
             <div
               key={msg.id}
               className={`flex items-start gap-3 ${
@@ -195,6 +198,13 @@ export const ChatTab: React.FC = () => {
                     )}
                   </div>
                 )}
+
+                <QuickReplies
+                  options={msg.slotOptions}
+                  isLatest={index === messages.length - 1}
+                  disabled={chatMutation.isPending}
+                  onSelect={(message) => handleSendMessage(message)}
+                />
 
                 {msg.isConfirmed && (
                   <div className="mt-2 flex items-center gap-1.5 text-xs text-[#059669] font-medium">

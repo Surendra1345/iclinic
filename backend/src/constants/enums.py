@@ -28,6 +28,7 @@ class ConversationState(str, Enum):
     SLOT_RESERVED = "slot_reserved"
     RECONFIRMING = "reconfirming"
     BOOKED = "booked"
+    CONFIRMATION_SENT = "confirmation_sent"
     RESCHEDULED = "rescheduled"
     CANCELLED = "cancelled"
     ABANDONED = "abandoned"

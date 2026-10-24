@@ -1,4 +1,5 @@
 """Registration tools ??? validate DOB and register new patients."""
+import difflib
 import re
 from datetime import date, datetime
 from typing import Optional
@@ -249,10 +250,61 @@ def validate_dob(dob_str: str) -> tuple[bool, Optional[date], str]:
     return True, parsed_date, ""
 
 
+def dob_retry_message(speech: str) -> Optional[str]:
+    """Spoken reason a date of birth was rejected, or None when the speech holds no date attempt."""
+    from src.control.agents.tools.slot_tools import has_date_reference
+
+    text = speech or ""
+    if re.search(r"\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2}\b(?!\d)", text):
+        return "Please say the full four-digit year of your date of birth, for example 3 September 2004."
+    if not (re.search(r"\d{4}", text) or has_date_reference(text)):
+        return None
+    is_valid, _, error = validate_dob(text)
+    if is_valid:
+        return None
+    if "future" in error or "range" in error:
+        reason = "That date of birth doesn't look right."
+    else:
+        reason = "I couldn't read that date of birth."
+    return f"{reason} Please say it again with the day, month name and full year, for example 14 August 2004."
+
+
+_KEYBOARD_RUNS = (
+    "qwer", "wert", "erty", "rtyu", "tyui", "yuio", "uiop", "asdf", "sdfg", "dfgh", "fghj", "ghjk", "hjkl",
+    "zxcv", "xcvb", "cvbn", "vbnm", "qazw", "wsxe",
+)
+
+
+_VOWELLESS_WORDS = {"hmm", "hmmm", "mmm", "shh", "psst", "tsk", "brr", "pls", "plz", "thx", "nth", "cry", "dry", "fly", "sky", "try", "why", "gym", "myth", "lynx"}
+
+
+def _is_gibberish_word(word: str) -> bool:
+    if word in _VOWELLESS_WORDS:
+        return False
+    if any(run in word for run in _KEYBOARD_RUNS):
+        return True
+    if re.search(r"(.)\1{2,}", word):                       # the same letter three times in a row
+        return True
+    if len(word) >= 3 and not re.search(r"[aeiouy]", word):  # no vowel at all
+        return True
+    return bool(re.search(r"[^aeiouy]{5,}", word))           # five consonants in a row
+
+
+def looks_like_gibberish(text: str) -> bool:
+    """True when any word is keyboard mashing or something no person is called ("asdf qwer", "xkcdfgh", "aaaa")."""
+    return any(_is_gibberish_word(word) for word in re.findall(r"[a-z]+", (text or "").lower()))
+
+
+def is_all_gibberish(text: str) -> bool:
+    """True when the whole short message is nonsense, so it can be answered with "that is not a name"."""
+    words = re.findall(r"[a-z]+", (text or "").lower())
+    return 1 <= len(words) <= 4 and all(_is_gibberish_word(word) for word in words)
+
+
 def is_invalid_name(text: str) -> bool:
     """Check if the provided name is a conversational phrase rather than a real name."""
     cleaned = text.strip().lower()
-    if is_greeting(cleaned):
+    if is_greeting(cleaned) or looks_like_gibberish(cleaned):
         return True
     phrases = [
         "reschedule", "appointment", "booking", "book", "cancel",
@@ -315,11 +367,20 @@ def name_from_speech(text: str) -> Optional[str]:
     return re.sub(r"[.!?,;:]+$", "", cleaned).strip().title() if is_name_only_candidate(cleaned) else None
 
 
+def names_a_clinic_term(text: str) -> bool:
+    """True when the reply is a specialty or branch of the clinic ("Gynecology", "Velachery"), not a person's name."""
+    from src.control.agents.tools import clinic_directory
+
+    if clinic_directory.specialty_in_text(text or "") is not None:
+        return True
+    return clinic_directory.match_branch(text or "") is not None
+
+
 def is_name_only_candidate(text: str) -> bool:
     """Accept only short, name-like replies; reject ordinary phrases and requests."""
     cleaned = re.sub(r"[.!?,;:]+$", "", strip_name_intro(text or ""))
     words = cleaned.split()
-    if not 1 <= len(words) <= 4 or is_invalid_name(cleaned):
+    if not 1 <= len(words) <= 4 or is_invalid_name(cleaned) or names_a_clinic_term(cleaned):
         return False
     if any(word.lower().strip("'’-") in _NON_NAME_WORDS for word in words):
         return False

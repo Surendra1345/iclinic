@@ -6,7 +6,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import select
+
 from src.control.agents.state import CallState
+from src.control.agents.tools.slot_speech import day_availability_speech
+from src.data.models.postgres.provider import Provider
 from src.control.agents.tools.booking_tools import check_patient_active_appointment
 from src.control.agents.tools.slot_tools import (
     get_slots_by_specialty_and_location, get_branch_doctors_info,
@@ -28,6 +32,66 @@ from src.control.agents.nodes._booking_held_slot import handle_held_slot
 from src.control.agents.nodes._booking_discovery import discover_booking_slots
 
 logger = logging.getLogger(__name__)
+
+
+async def _other_doctors_response(state: CallState, db: AsyncSession) -> Dict[str, Any]:
+    """The patient asked for another doctor while no slot is held: list the next available providers."""
+    offered = state.get("offered_slots") or []
+    held = state.get("target_slot_details") or {}
+    current = state.get("preferred_doctor") or held.get("doctor_name") or (
+        offered[0].get("doctor_name") if offered and len({s.get("doctor_name") for s in offered}) == 1 else None
+    )
+    specialty = (
+        state.get("preferred_specialty")
+        or clinic_directory.specialty_in_text(state.get("latest_user_speech") or "")
+        or held.get("specialty")
+        or next((s.get("specialty") for s in offered if s.get("specialty")), None)
+    )
+    if not specialty and current:
+        specialty = await db.scalar(select(Provider.specialty).where(Provider.full_name == current))
+    if not specialty:
+        return {
+            "preferred_doctor": None,
+            "awaiting_preferred_date": True,
+            "latest_agent_speech": "Which specialty or branch would you like me to look at for another doctor?",
+        }
+    saved_date = str(state.get("preferred_date") or "")[:10] or None
+    slots = await get_slots_by_date_and_criteria(db, date_query=saved_date, specialty=specialty, limit=50)
+    others = [slot for slot in slots if slot.get("doctor_name") != current]
+    if not others:
+        return {
+            "preferred_doctor": None,
+            "preferred_specialty": specialty,
+            "offered_slots": [],
+            "awaiting_preferred_date": True,
+            "latest_agent_speech": (
+                f"I couldn't find another {specialty} doctor with openings"
+                f"{' on that day' if saved_date else ''}. Would you like to try another date or branch?"
+            ),
+        }
+    if saved_date:
+        day_label = datetime.fromisoformat(saved_date).strftime("%A, %B %d")
+        speech, kept, _ = day_availability_speech(
+            others, day_label=day_label, closing="Which doctor and time would you like?"
+        )
+    else:
+        names = list(dict.fromkeys(
+            f"{slot['doctor_name']} at {_clean_loc(slot.get('location_name'))}" for slot in others
+        ))
+        speech = (
+            f"Other {specialty} doctors with openings are {', '.join(names[:6])}. "
+            "Which doctor would you prefer, and for which date?"
+        )
+        kept = others
+    return {
+        "preferred_doctor": None,
+        "preferred_specialty": specialty,
+        "offered_slots": kept,
+        "target_slot_id": None,
+        "target_slot_details": None,
+        "awaiting_preferred_date": True,
+        "latest_agent_speech": speech,
+    }
 
 
 async def _recover_from_slot_conflict(state, db, *, requested_date=None):
@@ -287,6 +351,9 @@ async def booking_agent_node(state: CallState, db: AsyncSession) -> Dict[str, An
             ),
         }
 
+    if is_asking_another_doctor and not target_slot:
+        return await _other_doctors_response(state, db)
+
     # 3. Check if patient asks for an alternative slot / different time / different date
     is_asking_alternative = any(
         phrase in lower_speech
@@ -399,6 +466,7 @@ async def booking_agent_node(state: CallState, db: AsyncSession) -> Dict[str, An
                 patient_email=effective_email if not user_wants_skip else None,
                 convo_id=convo_id,
                 appointment_type_name=state.get("preferred_appointment_type"),
+                reason=state.get("visit_reason"),
                 repo=repo,
                 db=db,
             )

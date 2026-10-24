@@ -26,6 +26,8 @@ class CallState(TypedDict, total=False):
     intent: Optional[str]
     semantic_label: Optional[str]
     last_repeat_speech: Optional[str]
+    wrong_person: bool
+    speech_localized: bool
     availability_context: Optional[Dict[str, Any]]
 
     # ── Dialogue / LLM Context ────────────────────────────────────────────────
@@ -47,6 +49,8 @@ class CallState(TypedDict, total=False):
     preferred_doctor: Optional[str]
     preferred_date: Optional[str]
     preferred_appointment_type: Optional[str]
+    awaiting_appointment_type: bool
+    visit_reason: Optional[str]
     awaiting_followup_visit: bool
     followup_candidates: Optional[List[Dict[str, Any]]]
     awaiting_followup_decision: bool

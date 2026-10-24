@@ -2,11 +2,11 @@
 import logging
 import uuid
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 # pyrefly: ignore[missing-import]
-from fastapi import APIRouter, Query
+from fastapi import Depends, APIRouter, HTTPException, Query
 # pyrefly: ignore[missing-import]
 from pydantic import BaseModel
 # pyrefly: ignore[missing-import]
@@ -15,10 +15,18 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
 from src.config.settings import settings
-from src.constants.enums import AppointmentStatus, ChannelType, ConversationState, OutcomeType, SlotStatus
+from src.utils.appointment_time import CLINIC_TIMEZONE
+from src.constants.enums import (
+    AppointmentStatus, ChannelType, ConfirmationStatusType, ConversationState, OutcomeType, SlotStatus,
+)
 from src.control.agents.tools.registration_tools import is_greeting, is_name_only_candidate
+from src.control.agents.tools import clinic_directory
+from src.control.agents.tools.chat_choices import reply_choices
+from src.control.agents.tools.slot_speech import chat_options
+from src.control.agents.tools.visit_type import active_visit_names
 from src.data.clients.postgres import AsyncSessionLocal
 from src.data.models.postgres.appointment import Appointment
+from src.data.models.postgres.appointment_type import AppointmentType
 from src.data.models.postgres.conversation import Conversation
 from src.data.models.postgres.location import Location
 from src.data.models.postgres.patient import Patient
@@ -34,6 +42,7 @@ from src.core.services.conversation_turn_service import conversation_turn_servic
 logger = logging.getLogger(__name__)
 
 dashboard_router = APIRouter(prefix="/api", tags=["Dashboard & Patient Chat"])
+from src.api.rest.dependencies import require_frontdesk
 from src.schemas.dashboard import AppointmentResponse, ChatMessageRequest, UpdateForwardedRequest
 sarvam_service = SarvamService()
 
@@ -47,7 +56,7 @@ def _is_name_only_message(message: str) -> bool:
 
 # ?????? Frontdesk Endpoints ?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 
-@dashboard_router.get("/dashboard/stats")
+@dashboard_router.get("/dashboard/stats", dependencies=[Depends(require_frontdesk)])
 async def get_dashboard_stats():
     """Returns high-level KPI metrics for the frontdesk dashboard."""
     async with AsyncSessionLocal() as session:
@@ -85,23 +94,33 @@ async def get_dashboard_stats():
         }
 
 
-@dashboard_router.get("/dashboard/appointments")
+@dashboard_router.get("/dashboard/appointments", dependencies=[Depends(require_frontdesk)])
 async def list_appointments(
     status: Optional[str] = Query(None, description="Filter by status: booked, cancelled, rescheduled, or all"),
     location: Optional[str] = Query(None, description="Filter by branch location name"),
     search: Optional[str] = Query(None, description="Search by patient name, phone, or doctor name"),
+    channel: Optional[str] = Query(None, description="Filter by booking channel: chat, voice, outbound_call, or all"),
+    date_from: Optional[date] = Query(None, description="Only appointments on or after this clinic-local date"),
+    date_to: Optional[date] = Query(None, description="Only appointments on or before this clinic-local date"),
+    provider: Optional[str] = Query(None, description="Filter by doctor name"),
+    appointment_type: Optional[str] = Query(None, description="Filter by appointment type name"),
+    confirmation_status: Optional[str] = Query(None, description="Filter by confirmation status: pending, sent, retrying, failed, flagged"),
+    sort: str = Query("created_at", description="Sort by: created_at, start_time, patient, doctor, status"),
+    order: str = Query("desc", description="asc or desc"),
 ):
     """Returns clinical appointment records with full patient, provider, and branch location details."""
     async with AsyncSessionLocal() as session:
         query = (
             select(Appointment)
+            .join(Slot, Appointment.slot_id == Slot.id)
             .options(
                 selectinload(Appointment.patient),
+                selectinload(Appointment.appointment_type),
+                selectinload(Appointment.conversation),
                 selectinload(Appointment.slot)
                 .selectinload(Slot.provider)
                 .selectinload(Provider.location),
             )
-            .order_by(Appointment.created_at.desc())
         )
 
         if status and status.lower() != "all":
@@ -111,7 +130,54 @@ async def list_appointments(
             except ValueError:
                 pass
 
+        if channel and channel.lower() != "all":
+            try:
+                query = query.where(Appointment.channel == ChannelType(channel.lower()))
+            except ValueError:
+                pass
+
+        if provider and provider.lower() != "all":
+            query = query.join(Provider, Slot.provider_id == Provider.id).where(Provider.full_name.ilike(f"%{provider}%"))
+        if appointment_type and appointment_type.lower() != "all":
+            query = query.join(AppointmentType, Appointment.appointment_type_id == AppointmentType.id).where(
+                AppointmentType.name.ilike(appointment_type)
+            )
+        if confirmation_status and confirmation_status.lower() != "all":
+            try:
+                wanted = ConfirmationStatusType(confirmation_status.lower())
+                query = query.join(Conversation, Appointment.conversation_id == Conversation.id).where(
+                    Conversation.confirmation_status == wanted
+                )
+            except ValueError:
+                pass
+        if date_from:
+            query = query.where(Slot.start_time >= datetime.combine(date_from, time.min, tzinfo=CLINIC_TIMEZONE))
+        if date_to:
+            query = query.where(
+                Slot.start_time < datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=CLINIC_TIMEZONE)
+            )
+
+        sort_columns = {
+            "created_at": Appointment.created_at,
+            "start_time": Slot.start_time,
+            "status": Appointment.status,
+        }
+        ascending = order.lower() == "asc"
+        if sort in sort_columns:
+            column = sort_columns[sort]
+            query = query.order_by(column.asc() if ascending else column.desc())
+        else:
+            query = query.order_by(Appointment.created_at.desc())
+
         results = (await session.scalars(query)).all()
+        if sort in ("patient", "doctor"):
+            def sort_key(a):
+                if sort == "patient":
+                    return (a.patient.full_name if a.patient else "").lower()
+                provider = a.slot.provider if a.slot else None
+                return (provider.full_name if provider else "").lower()
+
+            results = sorted(results, key=sort_key, reverse=not ascending)
 
         appts = []
         for a in results:
@@ -155,13 +221,20 @@ async def list_appointments(
                 "start_time": slot.start_time.isoformat() if slot else "",
                 "end_time": slot.end_time.isoformat() if slot else "",
                 "status": a.status.value,
+                "channel": a.channel.value if a.channel else None,
+                "appointment_type": a.appointment_type.name if a.appointment_type else None,
+                "reason": a.reason,
+                "confirmation_status": (
+                    a.conversation.confirmation_status.value
+                    if a.conversation and a.conversation.confirmation_status else None
+                ),
                 "created_at": a.created_at.isoformat() if a.created_at else "",
             })
 
         return {"appointments": appts, "total": len(appts)}
 
 
-@dashboard_router.get("/dashboard/patients")
+@dashboard_router.get("/dashboard/patients", dependencies=[Depends(require_frontdesk)])
 async def list_registered_patients(
     search: Optional[str] = Query(None, description="Search by patient name, phone, or email"),
     limit: int = Query(100, ge=1, le=500),
@@ -234,7 +307,7 @@ async def list_registered_patients(
         return {"patients": results, "total": len(results)}
 
 
-@dashboard_router.get("/dashboard/locations")
+@dashboard_router.get("/dashboard/locations", dependencies=[Depends(require_frontdesk)])
 async def list_clinic_locations():
     """Returns clinic branch locations along with active doctors and specialties."""
     async with AsyncSessionLocal() as session:
@@ -262,26 +335,68 @@ async def list_clinic_locations():
         return {"locations": data}
 
 
-@dashboard_router.get("/dashboard/conversations")
+@dashboard_router.get("/dashboard/appointment-types", dependencies=[Depends(require_frontdesk)])
+async def list_appointment_types():
+    """Active appointment type names, used by the front desk filters."""
+    async with AsyncSessionLocal() as session:
+        names = (await session.scalars(
+            select(AppointmentType.name).where(AppointmentType.is_active.is_(True)).order_by(AppointmentType.name)
+        )).all()
+        return {"appointment_types": list(names)}
+
+
+@dashboard_router.get("/dashboard/conversations", dependencies=[Depends(require_frontdesk)])
 async def list_conversations(
     channel: Optional[str] = Query(None, description="Filter by channel: chat, voice, outbound_call"),
     search: Optional[str] = Query(None, description="Search by patient name, phone, or sid"),
+    state: Optional[str] = Query(None, description="Filter by conversation state, e.g. booked, handed_to_front_desk"),
+    outcome: Optional[str] = Query(None, description="Filter by outcome, e.g. booked, abandoned, failed"),
+    confirmation_status: Optional[str] = Query(None, description="Filter by confirmation status, e.g. sent, flagged"),
+    date_from: Optional[date] = Query(None, description="Only conversations started on or after this date"),
+    date_to: Optional[date] = Query(None, description="Only conversations started on or before this date"),
+    sort: str = Query("updated_at", description="Sort by: updated_at, started_at, messages"),
+    order: str = Query("desc", description="asc or desc"),
     limit: int = Query(50, ge=1, le=100),
 ):
     """Returns conversation interaction records with turn messages and patient metadata."""
     async with AsyncSessionLocal() as session:
+        ascending = order.lower() == "asc"
+        sort_column = Conversation.started_at if sort == "started_at" else Conversation.updated_at
         query = (
             select(Conversation)
             .options(selectinload(Conversation.patient))
-            .order_by(Conversation.updated_at.desc())
-            .limit(limit)
+            .order_by(sort_column.asc() if ascending else sort_column.desc())
         )
+        # Search and message-count sorting happen after the query, so they need every row first.
+        if not search and sort != "messages":
+            query = query.limit(limit)
         if channel and channel.lower() != "all":
             try:
                 ch_enum = ChannelType(channel.lower())
                 query = query.where(Conversation.channel == ch_enum)
             except ValueError:
                 pass
+        if state and state.lower() != "all":
+            try:
+                query = query.where(Conversation.current_state == ConversationState(state.lower()))
+            except ValueError:
+                pass
+        if outcome and outcome.lower() != "all":
+            try:
+                query = query.where(Conversation.outcome == OutcomeType(outcome.lower()))
+            except ValueError:
+                pass
+        if confirmation_status and confirmation_status.lower() != "all":
+            try:
+                query = query.where(Conversation.confirmation_status == ConfirmationStatusType(confirmation_status.lower()))
+            except ValueError:
+                pass
+        if date_from:
+            query = query.where(Conversation.started_at >= datetime.combine(date_from, time.min, tzinfo=CLINIC_TIMEZONE))
+        if date_to:
+            query = query.where(
+                Conversation.started_at < datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=CLINIC_TIMEZONE)
+            )
 
         convos = (await session.scalars(query)).all()
         results = []
@@ -309,6 +424,7 @@ async def list_conversations(
                 "patient_phone": p_phone or "-",
                 "current_state": c.current_state.value if hasattr(c.current_state, "value") else str(c.current_state),
                 "outcome": c.outcome.value if c.outcome and hasattr(c.outcome, "value") else (str(c.outcome) if c.outcome else None),
+                "confirmation_status": c.confirmation_status.value if c.confirmation_status else None,
                 "messages": c.messages or [],
                 "total_messages": len(c.messages or []),
                 "started_at": c.started_at.isoformat() if c.started_at else (c.created_at.isoformat() if c.created_at else None),
@@ -316,10 +432,46 @@ async def list_conversations(
                 "collected_details": details,
             })
 
+        if sort == "messages":
+            results.sort(key=lambda item: item["total_messages"], reverse=not ascending)
+        results = results[:limit]
         return {"conversations": results, "total": len(results)}
 
 
-@dashboard_router.get("/dashboard/forwarded-requests")
+@dashboard_router.get("/dashboard/conversations/{conversation_id}", dependencies=[Depends(require_frontdesk)])
+async def get_conversation_detail(conversation_id: uuid.UUID):
+    """One conversation with its full transcript, state timeline and per-turn step log."""
+    async with AsyncSessionLocal() as session:
+        convo = (
+            await session.scalars(
+                select(Conversation)
+                .options(selectinload(Conversation.patient))
+                .where(Conversation.id == conversation_id)
+            )
+        ).first()
+        if convo is None:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        details = dict(convo.collected_details or {})
+        # The timeline is for staff, so leave out sensitive identity fields.
+        details.pop("patient_dob", None)
+        details.pop("registration_dob", None)
+        return {
+            "id": str(convo.id),
+            "channel": convo.channel.value,
+            "patient_name": details.get("patient_name") or (convo.patient.full_name if convo.patient else None),
+            "current_state": convo.current_state.value,
+            "outcome": convo.outcome.value if convo.outcome else None,
+            "confirmation_status": convo.confirmation_status.value if convo.confirmation_status else None,
+            "started_at": convo.started_at.isoformat() if convo.started_at else None,
+            "updated_at": convo.updated_at.isoformat() if convo.updated_at else None,
+            "messages": convo.messages or [],
+            "state_history": convo.state_history or [],
+            "step_logs": convo.step_logs or [],
+            "collected_details": details,
+        }
+
+
+@dashboard_router.get("/dashboard/forwarded-requests", dependencies=[Depends(require_frontdesk)])
 async def list_forwarded_requests(
     status: Optional[str] = Query(None, description="Filter: pending, contacted, resolved, or all"),
     search: Optional[str] = Query(None, description="Search by patient name, phone, or doctor"),
@@ -464,7 +616,7 @@ async def list_forwarded_requests(
         }
 
 
-@dashboard_router.patch("/dashboard/forwarded-requests/{conversation_id}")
+@dashboard_router.patch("/dashboard/forwarded-requests/{conversation_id}", dependencies=[Depends(require_frontdesk)])
 async def update_forwarded_request_status(
     conversation_id: str,
     req: UpdateForwardedRequest,
@@ -611,6 +763,8 @@ async def chat_with_clinic_agent(req: ChatMessageRequest):
             "preferred_doctor",
             "preferred_date",
             "preferred_appointment_type",
+            "awaiting_appointment_type",
+            "visit_reason",
             "awaiting_followup_visit",
             "followup_candidates",
             "awaiting_followup_decision",
@@ -631,6 +785,7 @@ async def chat_with_clinic_agent(req: ChatMessageRequest):
         try:
             invoke_turn = None
             specialty_branch_reply = False
+            await clinic_directory.ensure_directory(session)   # so "Gynecology" is not mistaken for a name
             if input_state.get("intent") == "faq_response" and input_state.get("preferred_specialty"):
                 from src.control.agents.nodes.booking_helpers import _match_branch
                 specialty_branch_reply = bool(_match_branch(req.message))
@@ -684,6 +839,23 @@ async def chat_with_clinic_agent(req: ChatMessageRequest):
                         {"audio_delivery": "text_only", "tts_error": "provider_exception"},
                     )
 
+            # Tap-to-pick times are a chat-only convenience, shown only while the patient is choosing.
+            choosing = (
+                not target_slot
+                and not result.get("booking_confirmed")
+                and not is_completed
+                and result.get("intent") in ("book", "reschedule")
+                and bool(result.get("offered_slots"))
+            )
+            slot_options = chat_options(result.get("offered_slots")) if choosing else []
+            if not slot_options and not is_completed:
+                # Other questions with fixed answers (branch, doctor, visit type, yes / no) also get buttons.
+                visit_types = (
+                    await active_visit_names(session) if "reason for your visit" in speech.lower() else []
+                )
+                slot_options = reply_choices(
+                    speech, branch_names=clinic_directory.branch_names(), visit_types=visit_types
+                )
             return {
                 "reply": speech,
                 "session_id": session_id,
@@ -691,6 +863,7 @@ async def chat_with_clinic_agent(req: ChatMessageRequest):
                 "target_slot": target_slot,
                 "booking_confirmed": result.get("booking_confirmed", False),
                 "audio_url": audio_url,
+                "slot_options": slot_options,
             }
         except Exception:
             logger.exception("Web chat execution error")

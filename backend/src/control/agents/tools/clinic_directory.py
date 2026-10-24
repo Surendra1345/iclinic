@@ -158,6 +158,25 @@ def all_specialties() -> List[str]:
     return sorted({d.specialty for d in _doctors if d.specialty})
 
 
+def specialty_in_text(text: str) -> Optional[str]:
+    """The clinic specialty a message names, matched by word ("ENT"), word start ("cardio..."), or close spelling."""
+    import difflib
+
+    tokens = re.findall(r"[a-z]+", (text or "").lower())
+    compact = "".join(tokens)
+    for name in all_specialties():
+        lowered = re.sub(r"[^a-z]", "", name.lower())
+        if len(lowered) < 5:
+            if lowered in tokens:
+                return name
+            continue
+        if any(token.startswith(lowered[:5]) for token in tokens):
+            return name
+        if len(compact) >= 5 and difflib.SequenceMatcher(None, compact, lowered).ratio() >= 0.85:
+            return name
+    return None
+
+
 def _same_branch(a: str, b: str) -> bool:
     ca, cb = _compact(_short_branch(a)), _compact(_short_branch(b))
     return bool(ca and cb and (ca in cb or cb in ca))

@@ -27,35 +27,20 @@ import {
   useForwardedRequests,
   useUpdateForwardedRequest,
 } from '../queries/frontdeskQueries'
-import { useQueryClient } from '@tanstack/react-query'
 import type { ForwardedRequestRecord } from '../../../types'
 import { formatDateTime, formatPhone } from '../../../lib/utils'
+import { RefreshButton } from './RefreshButton'
 
 export const ForwardedRequestsTable: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'contacted' | 'resolved'>('all')
   const [selectedRequest, setSelectedRequest] = useState<ForwardedRequestRecord | null>(null)
   const [staffNote, setStaffNote] = useState('')
-  const [isManualRefreshing, setIsManualRefreshing] = useState(false)
-  const queryClient = useQueryClient()
 
-  const { data, isLoading, refetch } = useForwardedRequests({
+  const { data, isLoading, refetch, dataUpdatedAt } = useForwardedRequests({
     status: statusFilter === 'all' ? undefined : statusFilter,
     search: searchQuery.trim() || undefined,
   })
-
-  const handleRefresh = async () => {
-    setIsManualRefreshing(true)
-    try {
-      await Promise.all([
-        refetch(),
-        queryClient.invalidateQueries({ queryKey: ['dashboard', 'forwarded_requests'] }),
-        queryClient.invalidateQueries({ queryKey: ['dashboard', 'stats'] }),
-      ])
-    } finally {
-      setTimeout(() => setIsManualRefreshing(false), 500)
-    }
-  }
 
   const updateMutation = useUpdateForwardedRequest()
 
@@ -203,21 +188,12 @@ export const ForwardedRequestsTable: React.FC = () => {
               ))}
             </div>
 
-            <Button
-              type="button"
-              variant="outline"
-              size="md"
-              className="h-10 text-xs justify-center"
-              onClick={handleRefresh}
-              disabled={isManualRefreshing}
-              leftIcon={
-                <RefreshCw
-                  className={`w-3.5 h-3.5 ${isManualRefreshing ? 'animate-spin' : ''}`}
-                />
-              }
-            >
-              {isManualRefreshing ? 'Refreshing...' : 'Refresh'}
-            </Button>
+            <RefreshButton
+              label="Refresh"
+              className=""
+              updatedAt={dataUpdatedAt}
+              onRefresh={() => refetch()}
+            />
           </div>
         </div>
       </Card>

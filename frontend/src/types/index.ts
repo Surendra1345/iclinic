@@ -11,6 +11,10 @@ export interface AppointmentRecord {
   start_time: string
   end_time: string
   status: AppointmentStatusType
+  channel?: string | null
+  appointment_type?: string | null
+  reason?: string | null
+  confirmation_status?: string | null
   created_at: string
 }
 
@@ -49,6 +53,11 @@ export interface TargetSlotInfo {
   location_address?: string
 }
 
+export interface SlotOption {
+  label: string
+  message: string
+}
+
 export interface ChatMessage {
   id: string
   sender: 'patient' | 'assistant'
@@ -56,6 +65,7 @@ export interface ChatMessage {
   timestamp: string
   targetSlot?: TargetSlotInfo
   isConfirmed?: boolean
+  slotOptions?: SlotOption[]
 }
 
 export interface TriggerCallRequest {
@@ -87,6 +97,7 @@ export interface ChatApiResponse {
   target_slot?: TargetSlotInfo
   booking_confirmed?: boolean
   audio_url?: string | null
+  slot_options?: SlotOption[]
 }
 
 export interface VoiceAssistantSessionResponse {
@@ -144,4 +155,57 @@ export interface ForwardedRequestsResponse {
   forwarded_requests: ForwardedRequestRecord[]
   total: number
   pending_count: number
+}
+
+export interface ConversationMessage {
+  role: 'patient' | 'agent' | string
+  content: string
+  at?: string
+  metadata?: Record<string, unknown>
+}
+
+export interface ConversationSummary {
+  id: string
+  call_sid: string
+  channel: string
+  patient_name: string
+  patient_phone: string
+  current_state: string
+  outcome: string | null
+  confirmation_status?: string | null
+  total_messages: number
+  started_at: string | null
+  updated_at: string | null
+}
+
+export interface ConversationStep {
+  at: string
+  channel?: string
+  intent?: string | null
+  state?: string | null
+  waiting_for?: string[]
+  slot_held?: boolean
+  slots_offered?: number
+  input?: string
+  output?: string
+  result?: 'success' | 'warning' | 'error'
+  verified?: boolean
+  booking_confirmed?: boolean
+  handoff?: boolean
+  elapsed_ms?: number
+  error_stage?: string | null
+}
+
+export interface ConversationDetail {
+  id: string
+  channel: string
+  patient_name: string | null
+  current_state: string
+  outcome: string | null
+  confirmation_status: string | null
+  started_at: string | null
+  updated_at: string | null
+  messages: ConversationMessage[]
+  state_history: { state: string; at: string }[]
+  step_logs: ConversationStep[]
 }

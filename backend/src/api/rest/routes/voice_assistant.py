@@ -3,6 +3,7 @@ from src.constants.enums import ChannelType
 import asyncio
 import base64
 import logging
+import re
 import time
 from html import escape
 from uuid import uuid4
@@ -19,6 +20,7 @@ from src.data.repositories.conversation_repository import ConversationRepository
 from src.handlers.http_clients.gemini_service import GeminiService
 from src.handlers.http_clients.sarvam_service import SarvamService
 from src.core.services.conversation_turn_service import conversation_turn_service
+from src.utils.indic_lexicon import quick_english
 from src.handlers.http_clients.audio_storage_service import audio_storage_service
 
 logger = logging.getLogger(__name__)
@@ -33,6 +35,12 @@ _VOICE_RETRY_MESSAGES = {
     "ta-IN": "உங்கள் குரலை தெளிவாகக் கேட்க முடியவில்லை. தயவுசெய்து மீண்டும் பேசவும்.",
     "te-IN": "మీ మాటలను స్పష్టంగా వినలేకపోయాను. దయచేసి మళ్లీ మాట్లాడండి.",
 }
+_VOICE_TRANSFER_MESSAGES = {
+    "en-IN": "I'm sorry, I'm having trouble hearing you. If you like, say 'front desk' and I will connect you to our team, or try speaking again.",
+    "ta-IN": "மன்னிக்கவும், உங்கள் குரலைக் கேட்பதில் சிரமம் இருக்கிறது. விரும்பினால் 'முன் மேசை' என்று சொல்லுங்கள், எங்கள் குழுவுடன் இணைக்கிறேன், அல்லது மீண்டும் பேசுங்கள்.",
+    "te-IN": "క్షమించండి, మీ మాట వినడంలో ఇబ్బంది ఉంది. కావాలంటే 'ఫ్రంట్ డెస్క్' అని చెప్పండి, మా బృందానికి కనెక్ట్ చేస్తాను, లేదా మళ్లీ మాట్లాడండి.",
+}
+STT_FAILURES_BEFORE_TRANSFER_OFFER = 2
 _VOICE_PROCESSING_MESSAGES = {
     "en-IN": "I am sorry, this is taking longer than expected. Please try again.",
     "ta-IN": "மன்னிக்கவும், இது எதிர்பார்த்ததை விட அதிக நேரம் எடுக்கிறது. தயவுசெய்து மீண்டும் முயற்சிக்கவும்.",
@@ -49,33 +57,80 @@ def _normalize_language(language: str) -> str:
     return "en-IN"
 
 
+async def _gemini_translate(prompt: str) -> str:
+    """One translation call, retried once; a blip or a slow reply should not fail the whole turn."""
+    last_error: Optional[BaseException] = None
+    for attempt in range(settings.VOICE_ASSISTANT_TRANSLATION_ATTEMPTS):
+        try:
+            result = await asyncio.wait_for(
+                gemini_service.generate_content(prompt, temperature=0.0),
+                timeout=settings.VOICE_ASSISTANT_TRANSLATION_TIMEOUT_SECONDS,
+            )
+            if result and result.strip():
+                return result.strip()
+            last_error = ValueError("empty translation")
+        except (asyncio.TimeoutError, Exception) as exc:  # noqa: BLE001 - any failure is retried then reported
+            last_error = exc
+            logger.warning("Translation attempt %d failed: %s", attempt + 1, exc)
+    raise RuntimeError("translation unavailable") from last_error
+
+
+_LANGUAGE_DETAILS = {
+    "ta-IN": ("Tamil", "\u0ba4\u0bae\u0bbf\u0bb4\u0bcd", re.compile(r"[\u0B80-\u0BFF]")),
+    "te-IN": ("Telugu", "\u0c24\u0c46\u0c32\u0c41\u0c17\u0c41", re.compile(r"[\u0C00-\u0C7F]")),
+}
+
+
 async def _translate(text: str, target_language: str) -> str:
     if not text or target_language == "en-IN":
         return text
+    code = _normalize_language(target_language)
+    name, native, script = _LANGUAGE_DETAILS[code]
+    # Naming the language and its script matters: Chennai place names pull some models toward Tamil even when
+    # Telugu was asked for, so the reply is also checked for the right script and asked again once if it is wrong.
     prompt = (
-        f"Translate the following clinic assistant message into {_normalize_language(target_language)}. "
+        f"Translate the following clinic assistant message into {name} ({native}, language code {code}). "
+        f"Write the answer only in {name} script; the other Indian scripts are wrong. "
         "Preserve doctor names, branch names, dates, times, and appointment details. "
         "Return only the translation.\n\n"
         f"Message: {text}"
     )
-    return await asyncio.wait_for(
-        gemini_service.generate_content(prompt, temperature=0.0),
-        timeout=settings.VOICE_ASSISTANT_TRANSLATION_TIMEOUT_SECONDS,
-    )
+    translated = await _gemini_translate(prompt)
+    if not script.search(translated):
+        logger.warning("Translation to %s came back in the wrong script; asking again", code)
+        translated = await _gemini_translate(prompt)
+        if not script.search(translated):
+            raise RuntimeError("translation unavailable")
+    return translated
 
 
 async def _to_english(text: str, language: str) -> str:
     if not text or language == "en-IN":
         return text
+    quick = quick_english(text)
+    if quick:
+        return quick
     prompt = (
         f"Translate the following patient message from {_normalize_language(language)} into English. "
         "Return only the translation and preserve names, dates, times, doctors, and locations.\n\n"
         f"Message: {text}"
     )
-    return await asyncio.wait_for(
-        gemini_service.generate_content(prompt, temperature=0.0),
-        timeout=settings.VOICE_ASSISTANT_TRANSLATION_TIMEOUT_SECONDS,
+    return await _gemini_translate(prompt)
+
+
+_INDIC_SCRIPT = re.compile(r"[\u0900-\u097F\u0B80-\u0BFF\u0C00-\u0C7F]")
+
+
+async def _english_from_indic_script(text: str) -> str:
+    """Speech recognition sometimes writes English names and phrases in an Indian script, even in an English
+    session ("Dr. Rajesh Kannan" as Tamil letters). Turn that back into plain English for the agent."""
+    prompt = (
+        "The following patient message was transcribed in an Indian script but was spoken in an English "
+        "conversation with a clinic. Write it in English: transliterate names and keep dates, times and doctor "
+        "names. Return only the English text.\n\n"
+        f"Message: {text}"
     )
+    return await _gemini_translate(prompt)
 
 
 async def _run_voice_turn_in_isolated_session(**kwargs):
@@ -206,6 +261,11 @@ async def process_voice_turn(
             conversation_repo = ConversationRepository(session)
             conversation = await conversation_repo.get_by_call_sid(session_id)
             if conversation:
+                # Ask again first; after repeated failures offer the front desk instead of looping.
+                failures = int((conversation.collected_details or {}).get("stt_failures", 0)) + 1
+                await conversation_repo.update_collected_details(conversation.id, {"stt_failures": failures})
+                if failures >= STT_FAILURES_BEFORE_TRANSFER_OFFER:
+                    failure_reply = _VOICE_TRANSFER_MESSAGES.get(failure_language, _VOICE_TRANSFER_MESSAGES["en-IN"])
                 await conversation_turn_service.save_message(
                     session, conversation.id, role="patient",
                     content="[Voice input could not be transcribed]",
@@ -230,10 +290,15 @@ async def process_voice_turn(
                 session, conversation.id, role="patient", content=transcript,
                 metadata={"language": language, "confidence": confidence},
             )
+            if (conversation.collected_details or {}).get("stt_failures"):
+                await conversation_repo.update_collected_details(conversation.id, {"stt_failures": 0})
 
     try:
         translation_started = time.perf_counter()
-        agent_input = await _to_english(transcript, language)
+        if language == "en-IN" and _INDIC_SCRIPT.search(transcript):
+            agent_input = await _english_from_indic_script(transcript)
+        else:
+            agent_input = await _to_english(transcript, language)
         logger.info(
             "Voice assistant input translation completed: session_id=%s language=%s duration=%.3fs",
             session_id, language, time.perf_counter() - translation_started,
@@ -368,15 +433,17 @@ async def process_voice_turn(
             }
         result = turn.state
         reply = turn.speech
+    # An untranslated English reply must be voiced in English, not read out by a Tamil/Telugu voice.
+    tts_language = "en-IN" if turn.error_stage == "response_translation" else language
     audio_url = None
     if settings.VOICE_ASSISTANT_TTS_ENABLED:
         try:
             tts_started = time.perf_counter()
-            generated_audio = await sarvam_service.text_to_speech(reply, target_language_code=language)
+            generated_audio = await sarvam_service.text_to_speech(reply, target_language_code=tts_language)
             if not generated_audio:
                 # A transient empty TTS result should not immediately force the
                 # browser fallback. Retry once for both Tamil and Telugu.
-                generated_audio = await sarvam_service.text_to_speech(reply, target_language_code=language)
+                generated_audio = await sarvam_service.text_to_speech(reply, target_language_code=tts_language)
             logger.info(
                 "Voice assistant TTS completed: session_id=%s language=%s duration=%.3fs audio=%s",
                 session_id, language, time.perf_counter() - tts_started, bool(generated_audio),

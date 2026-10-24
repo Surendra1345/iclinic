@@ -10,6 +10,9 @@ from src.control.agents.tools.slot_tools import get_slots_by_date_and_criteria, 
 from src.control.agents.nodes.booking_helpers import _clean_loc, _clean_slot_time, _extract_name_and_email, _extract_time_of_day, _format_slot_time_str, _match_branch
 from src.control.agents.nodes._booking_execution import _execute_booking
 from src.control.agents.nodes.dialogue_guardrails import is_explicit_confirmation
+from src.control.agents.tools.visit_type import (
+    DEFAULT_VISIT_TYPE, active_visit_names, resolve_visit_type, visit_type_question,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +48,31 @@ async def handle_held_slot(
                     pass
 
             has_confirm_word = is_explicit_confirmation(user_speech)
+
+            # Web chat only: the patient was asked for the visit reason. Their answer picks the
+            # appointment type (or is kept as the reason) and completes the confirmation they already gave.
+            visit_updates: dict = {}
+            visit_answered = False
+            if state.get("awaiting_appointment_type"):
+                chosen_type = resolve_visit_type(user_speech, await active_visit_names(db))
+                visit_updates = {
+                    "awaiting_appointment_type": False,
+                    "preferred_appointment_type": chosen_type or DEFAULT_VISIT_TYPE,
+                    "visit_reason": None if (chosen_type or has_confirm_word) else user_speech.strip()[:200],
+                }
+                state = {**state, **visit_updates}
+                visit_answered = True
+                # FR-9: reconfirm everything (type, provider, branch, date and time) before booking.
+                return {
+                    **visit_updates,
+                    "target_slot_id": target_slot_id,
+                    "target_slot_details": target_slot,
+                    "latest_agent_speech": (
+                        f"Just to confirm: a {visit_updates['preferred_appointment_type']} with "
+                        f"{target_slot.get('doctor_name')} at our {_clean_loc(target_slot.get('location_name'))} branch on "
+                        f"{_format_slot_time_str(target_slot.get('start_time', ''))}. Shall I book it?"
+                    ),
+                }
 
             # If patient specified a time of day
             if (req_time is not None or requested_window is not None) and current_time is not None and st_local is not None:
@@ -188,7 +216,7 @@ async def handle_held_slot(
             )
 
             # 5a. Patient confirms the booking
-            if has_confirm_word and not has_inquiry_or_negation:
+            if visit_answered or (has_confirm_word and not has_inquiry_or_negation):
                 raw_parsed_name, raw_parsed_email = _extract_name_and_email(user_speech)
                 current_name = raw_parsed_name or patient_name or state.get("patient_name")
                 current_email = raw_parsed_email or patient_email or state.get("patient_email")
@@ -205,11 +233,22 @@ async def handle_held_slot(
                     except Exception:
                         pass
 
+                if not state.get("preferred_appointment_type"):
+                    visit_names = await active_visit_names(db)
+                    if len(visit_names) > 1:
+                        return {
+                            "awaiting_appointment_type": True,
+                            "target_slot_id": target_slot_id,
+                            "target_slot_details": target_slot,
+                            "latest_agent_speech": visit_type_question(visit_names),
+                        }
+
                 needs_name = not current_name or current_name.strip() in ("Clinic Guest", "Valued Patient")
                 needs_email = not current_email
 
                 if needs_name and needs_email:
                     return {
+                        **visit_updates,
                         "awaiting_patient_email": True,
                         "target_slot_id": target_slot_id,
                         "target_slot_details": target_slot,
@@ -222,6 +261,7 @@ async def handle_held_slot(
                     }
                 elif needs_email:
                     return {
+                        **visit_updates,
                         "awaiting_patient_email": True,
                         "target_slot_id": target_slot_id,
                         "target_slot_details": target_slot,
@@ -242,6 +282,7 @@ async def handle_held_slot(
                     patient_email=current_email,
                     convo_id=convo_id,
                     appointment_type_name=state.get("preferred_appointment_type"),
+                    reason=state.get("visit_reason"),
                     repo=repo,
                     db=db,
                 )

@@ -71,3 +71,49 @@ export const STATUS_THEMES: Record<string, { bg: string; text: string; border: s
     dot: 'bg-sky-400',
   },
 }
+
+export const CHANNEL_FILTERS = [
+  { id: 'all', label: 'All Channels' },
+  { id: 'chat', label: 'Web Chat' },
+  { id: 'voice', label: 'Voice Assistant' },
+  { id: 'outbound_call', label: 'Outbound Call' },
+] as const
+
+export const APPOINTMENT_SORT_OPTIONS = [
+  { id: 'created_at', label: 'Sort: Booked at' },
+  { id: 'start_time', label: 'Sort: Appointment time' },
+  { id: 'patient', label: 'Sort: Patient' },
+  { id: 'doctor', label: 'Sort: Doctor' },
+  { id: 'status', label: 'Sort: Status' },
+] as const
+
+export const CONVERSATION_STATE_FILTERS = [
+  { id: 'all', label: 'All States' },
+  { id: 'identifying_patient', label: 'Identifying patient' },
+  { id: 'collecting_details', label: 'Collecting details' },
+  { id: 'suggesting_slots', label: 'Suggesting slots' },
+  { id: 'slot_reserved', label: 'Slot reserved' },
+  { id: 'reconfirming', label: 'Reconfirming' },
+  { id: 'booked', label: 'Booked' },
+  { id: 'confirmation_sent', label: 'Confirmation sent' },
+  { id: 'rescheduled', label: 'Rescheduled' },
+  { id: 'cancelled', label: 'Cancelled' },
+  { id: 'handed_to_front_desk', label: 'Handed to front desk' },
+  { id: 'abandoned', label: 'Abandoned' },
+  { id: 'failed', label: 'Failed' },
+] as const
+
+export const CONVERSATION_SORT_OPTIONS = [
+  { id: 'updated_at', label: 'Sort: Last activity' },
+  { id: 'started_at', label: 'Sort: Started' },
+  { id: 'messages', label: 'Sort: Message count' },
+] as const
+
+export const CONFIRMATION_STATUS_FILTERS = [
+  { id: 'all', label: 'All Confirmations' },
+  { id: 'sent', label: 'Confirmation sent' },
+  { id: 'pending', label: 'Confirmation pending' },
+  { id: 'retrying', label: 'Retrying' },
+  { id: 'flagged', label: 'Flagged (delivery problem)' },
+  { id: 'failed', label: 'Failed' },
+] as const

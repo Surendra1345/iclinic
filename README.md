@@ -26,8 +26,9 @@ src/
 ├── api/
 │   ├── rest/                        # FastAPI REST API
 │   │   ├── app.py                   # FastAPI application instance (CORS, error handling, metrics)
-│   │   ├── dependencies.py          # Route dependencies (e.g., DBSessionDep)
+│   │   ├── dependencies.py          # Route dependencies (DBSessionDep, require_frontdesk login check)
 │   │   └── routes/
+│   │       ├── auth.py              # Front desk login (token) endpoints
 │   │       ├── voice.py             # Outbound calls & Twilio voice webhooks
 │   │       ├── voice_assistant.py   # Browser voice assistant (STT / TTS)
 │   │       └── dashboard.py         # Patient chat & dashboard endpoints
@@ -41,6 +42,7 @@ src/
 │   ├── exceptions/                  # Domain exceptions (ClinicError, AppointmentServiceError, SlotUnavailableError)
 │   ├── services/                    # Business services
 │   │   ├── appointment_service.py        # Atomic book / reschedule / cancel
+│   │   ├── auth_service.py               # Front desk login and signed session tokens
 │   │   ├── conversation_turn_service.py  # Shared per-turn runner for chat, voice and calls
 │   │   ├── intent_classification_service.py # Gemini intent classification with offline fallback
 │   │   ├── medical_safety_service.py     # Emergency detection
@@ -82,8 +84,8 @@ src/
 │   ├── logging/                     # Logging setup (text or JSON via LOG_FORMAT) with request / call IDs
 │   ├── context.py                   # Request and call context
 │   └── metrics.py                   # Prometheus metrics
-├── schemas/                         # Pydantic request schemas (dashboard, calls, voice)
-└── utils/                           # Shared helpers (appointment time, branch names, PII redaction)
+├── schemas/                         # Pydantic request schemas (auth, dashboard, calls, voice)
+└── utils/                           # Shared helpers (appointment time, branch names, PII redaction, Tamil / Telugu short answers)
 ```
 
 ---
@@ -162,6 +164,26 @@ DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5432/iclinic
 DB_ECHO=False
 ```
 
+#### Optional settings
+
+```env
+# Front desk dashboard login (required to sign in at /frontdesk/login)
+FRONTDESK_EMAIL=frontdesk@example.com
+FRONTDESK_PASSWORD=choose-a-strong-password
+AUTH_SECRET=long-random-string        # signs session tokens
+AUTH_TOKEN_TTL_MINUTES=480
+
+# Only these numbers may be dialled by POST /api/calls/trigger (comma-separated; empty = no limit)
+OUTBOUND_CALL_ALLOWED_NUMBERS=+919876543210
+
+# Confirmation SMS / email delivery attempts and the pause between them
+NOTIFICATION_RETRY_ATTEMPTS=3
+NOTIFICATION_RETRY_DELAY_SECONDS=1
+
+# Tamil / Telugu voice: translation attempts per message
+VOICE_ASSISTANT_TRANSLATION_ATTEMPTS=2
+```
+
 ### 2. Install Dependencies
 
 Install dependencies into your local virtual environment using `uv`:
@@ -198,4 +220,23 @@ uv run python -m src.data.seed --reset
 
 ```bash
 uv run uvicorn src.main:app --reload
+```
+### 6. Run the Tests
+
+```bash
+cd backend
+uv run pytest                      # unit tests (no database changes)
+```
+
+The live end-to-end journey in `backend/tests/e2e` talks to a running backend and books, reschedules and cancels one
+appointment for a test patient. It is skipped unless these are set (PowerShell shown):
+
+```powershell
+$env:E2E_BASE_URL="http://localhost:8000"
+$env:E2E_PATIENT_NAME="Surendra"
+$env:E2E_PATIENT_DOB="3 September 2004"     # a seeded patient with no active appointment
+$env:E2E_PATIENT_PHONE="+919986251229"      # that patient's phone
+$env:E2E_FRONTDESK_EMAIL="frontdesk@gmail.com"
+$env:E2E_FRONTDESK_PASSWORD="frontdesk@123"
+uv run pytest tests/e2e -q -s
 ```
