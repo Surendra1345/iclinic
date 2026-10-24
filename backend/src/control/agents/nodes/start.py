@@ -52,6 +52,7 @@ async def start_conversation_node(state: CallState, db: AsyncSession) -> Dict[st
             "pending_intent": None,
             "intent": None,
             "is_completed": False,
+            "speech_localized": False,
         }
 
     # The checkpointer carries state between turns, so per-turn outcome flags must be
@@ -61,7 +62,17 @@ async def start_conversation_node(state: CallState, db: AsyncSession) -> Dict[st
         "conversation_id": convo_id,
         "booking_confirmed": False,
         "is_completed": False,
+        "speech_localized": False,
+        "wrong_person": False,
     }
+    if state.get("booking_confirmed"):
+        # A finished booking/reschedule must not leak its date into the next request.
+        turn_reset.update({
+            "preferred_date": None,
+            "preferred_appointment_type": None,
+            "awaiting_appointment_type": False,
+            "visit_reason": None,
+        })
     if state.get("booking_confirmed") and state.get("intent") == "cancel":
         # The cancelled appointment is no longer active; later turns must not act on it.
         turn_reset.update({

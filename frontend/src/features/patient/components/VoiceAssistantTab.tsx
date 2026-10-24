@@ -8,6 +8,7 @@ import { patientService } from '../services/patientService'
 import { resolveVoiceAudioUrl, selectMaleSpeechVoice } from './selectMaleSpeechVoice'
 import { ENV } from '../../../config/env'
 import type { ChatMessage } from '../../../types'
+import { formatClockIST } from '../../../lib/utils'
 
 export const VoiceAssistantTab: React.FC = () => {
   const [isListening, setIsListening] = useState(false)
@@ -19,7 +20,7 @@ export const VoiceAssistantTab: React.FC = () => {
       id: 'welcome',
       sender: 'assistant',
       text: `Hello! Welcome to ${ENV.CLINIC_NAME}. How can I help you today?`,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timestamp: formatClockIST(),
     },
   ])
   const [speechError, setSpeechError] = useState<string | null>(null)
@@ -114,14 +115,14 @@ export const VoiceAssistantTab: React.FC = () => {
         id: `u_${Date.now()}`,
         sender: 'patient',
         text: response.transcript,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: formatClockIST(),
       }])
 
       const botMsg: ChatMessage = {
         id: `a_${Date.now()}`,
         sender: 'assistant',
         text: response.reply,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: formatClockIST(),
         targetSlot: response.target_slot,
         isConfirmed: response.booking_confirmed,
       }
@@ -148,7 +149,7 @@ export const VoiceAssistantTab: React.FC = () => {
         id: `err_${Date.now()}`,
         sender: 'assistant',
         text: 'I apologize, I had trouble processing that request. Please try again or switch to the call tab.',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: formatClockIST(),
       }
       setMessages((prev) => [...prev, fallbackMsg])
     } finally {
@@ -299,7 +300,7 @@ export const VoiceAssistantTab: React.FC = () => {
         id: 'welcome_reset',
         sender: 'assistant',
         text: `Hello! Welcome to ${ENV.CLINIC_NAME}. How can I help you today?`,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: formatClockIST(),
       },
     ])
   }

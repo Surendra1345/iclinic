@@ -292,6 +292,14 @@ calls_router = APIRouter(prefix="/api", tags=["Outbound Calls"])
 from src.schemas.calls import TriggerCallRequest
 
 
+def _call_allowed(clean_phone: str) -> bool:
+    """True when no allowlist is configured, or the number is on it (guards test and demo deployments)."""
+    allowed = {
+        normalize_phone(item) for item in settings.OUTBOUND_CALL_ALLOWED_NUMBERS.split(",") if item.strip()
+    }
+    return not allowed or clean_phone in allowed
+
+
 @calls_router.post("/calls/trigger")
 async def trigger_outbound_call(payload: TriggerCallRequest):
     """
@@ -301,6 +309,9 @@ async def trigger_outbound_call(payload: TriggerCallRequest):
     clean_phone = normalize_phone(payload.to_phone)
     if not clean_phone:
         raise HTTPException(status_code=400, detail="A valid to_phone is required.")
+    if not _call_allowed(clean_phone):
+        logger.warning("Outbound call refused: number is not on the allowed list")
+        raise HTTPException(status_code=403, detail="This number is not on the list of numbers that may be called.")
 
     patient_id = None
     conversation_id = None

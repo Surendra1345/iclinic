@@ -13,6 +13,7 @@ from src.control.agents.tools.registration_tools import (
     is_closing_or_thanks,
     is_greeting,
     register_new_patient,
+    dob_retry_message,
     validate_dob,
 )
 from src.control.agents.tools.booking_tools import check_patient_active_appointment
@@ -121,7 +122,8 @@ async def register_patient_node(state: CallState, db: AsyncSession) -> Dict[str,
             return {
                 "patient_name": name,
                 "is_new_patient": True,
-                "latest_agent_speech": f"Thank you, {name}. What is your date of birth? (Please state as Day-Month-Year)",
+                "latest_agent_speech": dob_retry_message(user_speech)
+                or f"Thank you, {name}. What is your date of birth? (Please state as Day-Month-Year)",
             }
 
     # Step C: Missing Email

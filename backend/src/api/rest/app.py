@@ -67,6 +67,7 @@ def create_app() -> FastAPI:
     from src.api.rest.routes.voice import calls_router, twiml_router
     from src.api.rest.routes.voice_assistant import router as voice_assistant_router
     from src.api.rest.routes.dashboard import dashboard_router
+    from src.api.rest.routes.auth import auth_router
 
     # 1. Outbound Call Trigger (POST /api/calls/trigger)
     app.include_router(calls_router)
@@ -76,6 +77,7 @@ def create_app() -> FastAPI:
     app.include_router(voice_assistant_router)
 
     # 3. Frontdesk Dashboard & Patient Chat (/api/dashboard/..., /api/chat)
+    app.include_router(auth_router)
     app.include_router(dashboard_router)
 
     @app.exception_handler(Exception)

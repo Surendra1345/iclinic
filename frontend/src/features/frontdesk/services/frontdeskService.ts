@@ -2,6 +2,8 @@ import { apiClient } from '../../../lib/axios'
 import type {
   AppointmentRecord,
   ClinicLocation,
+  ConversationDetail,
+  ConversationSummary,
   DashboardStats,
   ForwardedRequestsResponse,
 } from '../../../types'
@@ -32,6 +34,18 @@ export interface PatientListItem {
 export interface PatientListResponse {
   patients: PatientListItem[]
   total: number
+}
+
+export interface ConversationFilters {
+  channel?: string
+  search?: string
+  state?: string
+  outcome?: string
+  confirmation_status?: string
+  date_from?: string
+  date_to?: string
+  sort?: string
+  order?: string
 }
 
 export interface ClinicLocationsResponse {
@@ -65,12 +79,47 @@ export const frontdeskService = {
     status?: string
     location?: string
     search?: string
+    channel?: string
+    date_from?: string
+    date_to?: string
+    provider?: string
+    appointment_type?: string
+    confirmation_status?: string
+    sort?: string
+    order?: string
   }): Promise<AppointmentListResponse> {
     const response = await apiClient.get<AppointmentListResponse>(
       '/api/dashboard/appointments',
       { params }
     )
     return response.data
+  },
+
+  /**
+   * Fetches conversation records (chat, voice, outbound call) with filters and sorting.
+   */
+  async getConversations(params?: ConversationFilters): Promise<{ conversations: ConversationSummary[]; total: number }> {
+    const response = await apiClient.get<{ conversations: ConversationSummary[]; total: number }>(
+      '/api/dashboard/conversations',
+      { params }
+    )
+    return response.data
+  },
+
+  /**
+   * Fetches one conversation with its transcript, state timeline, and step log.
+   */
+  async getConversationDetail(id: string): Promise<ConversationDetail> {
+    const response = await apiClient.get<ConversationDetail>(`/api/dashboard/conversations/${id}`)
+    return response.data
+  },
+
+  /**
+   * Fetches the active appointment type names for the filters.
+   */
+  async getAppointmentTypes(): Promise<string[]> {
+    const response = await apiClient.get<{ appointment_types: string[] }>('/api/dashboard/appointment-types')
+    return response.data.appointment_types
   },
 
   /**

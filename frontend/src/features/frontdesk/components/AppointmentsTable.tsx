@@ -1,5 +1,4 @@
 import React, { useState, useMemo, useEffect } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
 import {
   Search,
   RefreshCw,
@@ -12,26 +11,38 @@ import {
   Inbox,
   X,
   RotateCcw,
+  ArrowDownUp,
 } from 'lucide-react'
 import { Card } from '../../../components/ui/Card'
 import { Input } from '../../../components/ui/Input'
 import { Select } from '../../../components/ui/Select'
 import { Button } from '../../../components/ui/Button'
 import { StatusBadge } from './StatusBadge'
-import { useAppointments, useClinicLocations } from '../queries/frontdeskQueries'
+import { RefreshButton } from './RefreshButton'
+import { useAppointments, useAppointmentTypes, useClinicLocations } from '../queries/frontdeskQueries'
+import { ConfirmationBadge } from './ConfirmationBadge'
 import {
+  APPOINTMENT_SORT_OPTIONS,
   APPOINTMENT_STATUS_FILTERS,
+  CHANNEL_FILTERS,
+  CONFIRMATION_STATUS_FILTERS,
   CLINIC_BRANCHES,
 } from '../../../config/constants'
-import { formatDateTime, formatPhone } from '../../../lib/utils'
+import { formatClockIST, formatDateTime, formatPhone } from '../../../lib/utils'
 
 export const AppointmentsTable: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('all')
   const [locationFilter, setLocationFilter] = useState('all')
+  const [channelFilter, setChannelFilter] = useState('all')
+  const [providerFilter, setProviderFilter] = useState('all')
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [confirmationFilter, setConfirmationFilter] = useState('all')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [sortBy, setSortBy] = useState('created_at')
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
   const [searchQuery, setSearchQuery] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
-  const [isManualRefreshing, setIsManualRefreshing] = useState(false)
-  const queryClient = useQueryClient()
 
   // Debounce search query to avoid stuttering requests
   useEffect(() => {
@@ -42,6 +53,23 @@ export const AppointmentsTable: React.FC = () => {
   }, [searchQuery])
 
   const { data: locationsData } = useClinicLocations()
+  const { data: appointmentTypes } = useAppointmentTypes()
+
+  const providerOptions = useMemo(
+    () => [
+      { id: 'all', label: 'All Doctors' },
+      ...Array.from(
+        new Set((locationsData?.locations ?? []).flatMap((loc) => loc.doctors.map((doc) => doc.full_name)))
+      )
+        .sort()
+        .map((name) => ({ id: name, label: name })),
+    ],
+    [locationsData]
+  )
+  const typeOptions = useMemo(
+    () => [{ id: 'all', label: 'All Appointment Types' }, ...(appointmentTypes ?? []).map((n) => ({ id: n, label: n }))],
+    [appointmentTypes]
+  )
 
   // Dynamic branch list from DB locations or fallback to constants
   const branchOptions = useMemo(() => {
@@ -61,10 +89,19 @@ export const AppointmentsTable: React.FC = () => {
     data,
     isLoading,
     refetch,
+    dataUpdatedAt,
   } = useAppointments({
     status: statusFilter !== 'all' ? statusFilter : undefined,
     location: locationFilter !== 'all' ? locationFilter : undefined,
     search: debouncedSearch || undefined,
+    channel: channelFilter !== 'all' ? channelFilter : undefined,
+    provider: providerFilter !== 'all' ? providerFilter : undefined,
+    appointment_type: typeFilter !== 'all' ? typeFilter : undefined,
+    confirmation_status: confirmationFilter !== 'all' ? confirmationFilter : undefined,
+    date_from: dateFrom || undefined,
+    date_to: dateTo || undefined,
+    sort: sortBy,
+    order: sortOrder,
   })
 
   const rawAppointments = data?.appointments || []
@@ -102,25 +139,27 @@ export const AppointmentsTable: React.FC = () => {
   }, [rawAppointments, searchQuery, statusFilter, locationFilter])
 
   const isFiltered =
-    statusFilter !== 'all' || locationFilter !== 'all' || searchQuery.trim() !== ''
+    statusFilter !== 'all' ||
+    locationFilter !== 'all' ||
+    channelFilter !== 'all' ||
+    providerFilter !== 'all' ||
+    typeFilter !== 'all' ||
+    confirmationFilter !== 'all' ||
+    dateFrom !== '' ||
+    dateTo !== '' ||
+    searchQuery.trim() !== ''
 
   const handleResetFilters = () => {
     setStatusFilter('all')
     setLocationFilter('all')
+    setChannelFilter('all')
+    setProviderFilter('all')
+    setTypeFilter('all')
+    setConfirmationFilter('all')
+    setDateFrom('')
+    setDateTo('')
     setSearchQuery('')
     setDebouncedSearch('')
-  }
-
-  const handleRefresh = async () => {
-    setIsManualRefreshing(true)
-    try {
-      await Promise.all([
-        refetch(),
-        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
-      ])
-    } finally {
-      setTimeout(() => setIsManualRefreshing(false), 500)
-    }
   }
 
   return (
@@ -163,22 +202,75 @@ export const AppointmentsTable: React.FC = () => {
           />
 
           <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="md"
-              className="w-full h-10 text-xs justify-center"
-              onClick={handleRefresh}
-              disabled={isManualRefreshing}
-              leftIcon={
-                <RefreshCw
-                  className={`w-3.5 h-3.5 ${isManualRefreshing ? 'animate-spin' : ''}`}
-                />
-              }
-            >
-              {isManualRefreshing ? 'Refreshing...' : 'Refresh Table'}
-            </Button>
+            <RefreshButton
+              label="Refresh Table"
+              className="w-full"
+              updatedAt={dataUpdatedAt}
+              onRefresh={() => refetch()}
+            />
           </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end mt-3">
+          <Select
+            options={providerOptions}
+            value={providerFilter}
+            onChange={(e) => setProviderFilter(e.target.value)}
+            className="h-10 text-xs"
+          />
+          <Select
+            options={typeOptions}
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            className="h-10 text-xs"
+          />
+          <Select
+            options={CONFIRMATION_STATUS_FILTERS}
+            value={confirmationFilter}
+            onChange={(e) => setConfirmationFilter(e.target.value)}
+            className="h-10 text-xs"
+          />
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end mt-3">
+          <Select
+            options={CHANNEL_FILTERS}
+            value={channelFilter}
+            onChange={(e) => setChannelFilter(e.target.value)}
+            className="h-10 text-xs"
+          />
+          <Input
+            type="date"
+            label="Appointment from"
+            value={dateFrom}
+            max={dateTo || undefined}
+            onChange={(e) => setDateFrom(e.target.value)}
+            className="h-10 text-xs"
+          />
+          <Input
+            type="date"
+            label="Appointment to"
+            value={dateTo}
+            min={dateFrom || undefined}
+            onChange={(e) => setDateTo(e.target.value)}
+            className="h-10 text-xs"
+          />
+          <Select
+            options={APPOINTMENT_SORT_OPTIONS}
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="h-10 text-xs"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="md"
+            className="w-full h-10 text-xs justify-center"
+            onClick={() => setSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'))}
+            leftIcon={<ArrowDownUp className="w-3.5 h-3.5" />}
+          >
+            {sortOrder === 'asc' ? 'Oldest / A-Z first' : 'Newest / Z-A first'}
+          </Button>
         </div>
 
         {isFiltered && (
@@ -317,7 +409,7 @@ export const AppointmentsTable: React.FC = () => {
                         {appt.end_time && (
                           <p className="text-[11px] text-[#475569] flex items-center gap-1 pl-5">
                             <Clock className="w-3 h-3 text-[#64748B]" />
-                            to {new Date(appt.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            to {formatClockIST(appt.end_time)}
                           </p>
                         )}
                       </div>
@@ -325,7 +417,15 @@ export const AppointmentsTable: React.FC = () => {
 
                     {/* Status */}
                     <td className="py-3.5 px-4">
-                      <StatusBadge status={appt.status} />
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <StatusBadge status={appt.status} />
+                        <ConfirmationBadge status={appt.confirmation_status} />
+                      </div>
+                      {(appt.appointment_type || appt.channel) && (
+                        <p className="text-[11px] text-[#64748B] mt-1">
+                          {[appt.appointment_type, appt.channel?.replace('_', ' ')].filter(Boolean).join(' · ')}
+                        </p>
+                      )}
                     </td>
 
                     {/* Created at */}

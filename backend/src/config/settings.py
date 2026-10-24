@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
     TWILIO_AUTH_TOKEN: str = os.getenv("TWILIO_AUTH_TOKEN", "")
     TWILIO_PHONE_NUMBER: str = os.getenv("TWILIO_PHONE_NUMBER", "")
+    # Comma-separated phone numbers the call trigger may dial. Empty means no restriction.
+    OUTBOUND_CALL_ALLOWED_NUMBERS: str = os.getenv("OUTBOUND_CALL_ALLOWED_NUMBERS", "")
 
     # ── Email notifications (SMTP) ───────────────────────────────────────
     SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
@@ -56,6 +58,9 @@ class Settings(BaseSettings):
     VOICE_ASSISTANT_TRANSLATION_TIMEOUT_SECONDS: float = float(
         os.getenv("VOICE_ASSISTANT_TRANSLATION_TIMEOUT_SECONDS", "12")
     )
+    NOTIFICATION_RETRY_ATTEMPTS: int = int(os.getenv("NOTIFICATION_RETRY_ATTEMPTS", "3"))
+    NOTIFICATION_RETRY_DELAY_SECONDS: float = float(os.getenv("NOTIFICATION_RETRY_DELAY_SECONDS", "1"))
+    VOICE_ASSISTANT_TRANSLATION_ATTEMPTS: int = int(os.getenv("VOICE_ASSISTANT_TRANSLATION_ATTEMPTS", "2"))
     VOICE_ASSISTANT_TURN_TIMEOUT_SECONDS: float = float(
         os.getenv("VOICE_ASSISTANT_TURN_TIMEOUT_SECONDS", "35")
     )
@@ -105,6 +110,11 @@ class Settings(BaseSettings):
     APP_ENV: str = os.getenv("APP_ENV", "development")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_FORMAT: str = os.getenv("LOG_FORMAT", "text")
+    # Front desk dashboard login. Set these in the environment, never in code.
+    FRONTDESK_EMAIL: str = os.getenv("FRONTDESK_EMAIL", "")
+    FRONTDESK_PASSWORD: str = os.getenv("FRONTDESK_PASSWORD", "")
+    AUTH_SECRET: str = os.getenv("AUTH_SECRET", "")
+    AUTH_TOKEN_TTL_MINUTES: int = int(os.getenv("AUTH_TOKEN_TTL_MINUTES", "480"))
 
 
 settings = Settings()

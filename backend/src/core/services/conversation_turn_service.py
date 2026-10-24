@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.control.agents.graph import get_agent_graph
 from src.constants.enums import ConversationState
+from src.core.services import deferred_tasks
+from src.utils.pii import redact_pii
 from src.data.repositories.conversation_repository import ConversationRepository
 from src.data.repositories.outbound_call_repository import OutboundCallRepository
 from src.observability.metrics import (
@@ -47,7 +49,7 @@ class ConversationTurnService:
         "preferred_location",
         "preferred_doctor",
         "preferred_date",
-        "preferred_appointment_type",
+        "preferred_appointment_type", "awaiting_appointment_type", "visit_reason",
         "awaiting_followup_visit",
         "followup_candidates",
         "awaiting_followup_decision",
@@ -71,13 +73,54 @@ class ConversationTurnService:
         if result.get("booking_confirmed"):
             return {"book": ConversationState.BOOKED, "reschedule": ConversationState.RESCHEDULED,
                     "cancel": ConversationState.CANCELLED}.get(intent)
+        waiting_on_patient = any(
+            result.get(flag)
+            for flag in ("awaiting_cancel_confirmation", "awaiting_patient_email", "awaiting_appointment_type")
+        )
         if result.get("target_slot_id"):
-            return ConversationState.SLOT_RESERVED
+            return ConversationState.RECONFIRMING if waiting_on_patient else ConversationState.SLOT_RESERVED
+        if result.get("awaiting_cancel_confirmation"):
+            return ConversationState.RECONFIRMING
+        if result.get("offered_slots") and intent in ("book", "reschedule"):
+            return ConversationState.SUGGESTING_SLOTS
         if result.get("is_verified"):
             return ConversationState.COLLECTING_DETAILS
         if result.get("awaiting_identity_verification") or result.get("pending_intent"):
             return ConversationState.IDENTIFYING_PATIENT
         return None
+
+    _AWAITING_FLAGS = (
+        "awaiting_identity_verification", "awaiting_preferred_date", "awaiting_patient_email",
+        "awaiting_appointment_type", "awaiting_cancel_confirmation", "awaiting_change_action_choice",
+        "awaiting_followup_visit", "awaiting_followup_decision", "awaiting_handoff_contact",
+    )
+
+    @classmethod
+    def _step_log(
+        cls, result: dict[str, Any], channel: str, error_stage: Optional[str], elapsed: float,
+        patient_text: str = "", speech: str = "",
+    ) -> dict[str, Any]:
+        """One record per turn: what the patient said, what the agent decided and replied, and how it went."""
+        state = cls._conversation_state(result)
+        unclear = "understand" in (speech or "").lower()[:60]
+        step_result = "error" if error_stage else ("warning" if (result.get("handoff_required") or unclear) else "success")
+        return {
+            "input": redact_pii(patient_text or "")[:300],
+            "output": (speech or "")[:300],
+            "result": step_result,
+            "at": datetime.now(timezone.utc).isoformat(),
+            "channel": channel,
+            "intent": result.get("intent"),
+            "state": state.value if state else None,
+            "waiting_for": [flag.removeprefix("awaiting_") for flag in cls._AWAITING_FLAGS if result.get(flag)],
+            "slot_held": bool(result.get("target_slot_id")),
+            "slots_offered": len(result.get("offered_slots") or []),
+            "verified": bool(result.get("is_verified")),
+            "booking_confirmed": bool(result.get("booking_confirmed")),
+            "handoff": bool(result.get("handoff_required")),
+            "elapsed_ms": round(elapsed * 1000),
+            "error_stage": error_stage,
+        }
 
     @staticmethod
     def _json_safe(value: Any) -> Any:
@@ -138,6 +181,7 @@ class ConversationTurnService:
         repo = ConversationRepository(db)
         error_stage: Optional[str] = None
         result: dict[str, Any]
+        deferred_jobs = deferred_tasks.begin()
 
         try:
             if not patient_message_saved:
@@ -180,7 +224,7 @@ class ConversationTurnService:
             }
 
         speech = result.get("latest_agent_speech") or "How can I help you?"
-        if response_transform and error_stage is None:
+        if response_transform and error_stage is None and not result.get("speech_localized"):
             try:
                 speech = await response_transform(speech)
                 if not speech:
@@ -188,7 +232,8 @@ class ConversationTurnService:
             except Exception:
                 error_stage = "response_translation"
                 logger.exception("Conversation turn failed: error_stage=response_translation conversation_id=%s channel=%s", convo_id, channel)
-                speech = result.get("latest_agent_speech") or "I am sorry, I could not translate my reply. Please try again."
+                english_reply = result.get("latest_agent_speech") or "Please try again."
+                speech = f"Sorry, I could not translate my reply, so I will continue in English. {english_reply}"
         result["latest_agent_speech"] = speech
 
         try:
@@ -214,16 +259,19 @@ class ConversationTurnService:
                 await repo.mark_identity_verified(convo_id)
             await repo.persist_turn_progress(
                 convo_id, state=self._conversation_state(result),
-                step={"at": datetime.now(timezone.utc).isoformat(), "channel": channel,
-                      "intent": result.get("intent"), "error_stage": error_stage},
+                step=self._step_log(result, channel, error_stage, time.perf_counter() - started_at, patient_text, speech),
             )
             if result.get("booking_confirmed"):
                 await repo.record_action_outcome(convo_id, result.get("intent"))
             await db.commit()
+            # Slow follow-up work (confirmation messages) starts only now that the turn is saved.
+            deferred_tasks.launch(deferred_jobs)
         except Exception:
             logger.exception("Conversation turn failed: error_stage=persistence conversation_id=%s", convo_id)
             await db.rollback()
             # Keep the generated response usable even when the transcript write fails.
+        finally:
+            deferred_tasks.reset()
 
         elapsed = time.perf_counter() - started_at
         voice_turn_duration_seconds.observe(elapsed)

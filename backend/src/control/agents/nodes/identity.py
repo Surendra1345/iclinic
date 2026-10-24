@@ -15,6 +15,7 @@ from src.control.agents.tools.registration_tools import (
     is_name_correction,
     is_name_only_candidate,
     name_from_speech,
+    dob_retry_message,
     validate_dob,
 )
 from src.control.agents.tools.booking_tools import check_patient_active_appointment
@@ -292,7 +293,8 @@ async def identity_agent_node(state: CallState, db: AsyncSession) -> Dict[str, A
                 else:
                     followup = "How can I assist you with your appointment today?"
 
-            active_intent = "reschedule" if active_appt_id else (pending or "book")
+            wants_cancel = bool(active_appt_id) and pending == "cancel"
+            active_intent = "cancel" if wants_cancel else ("reschedule" if active_appt_id else (pending or "book"))
             result = {
                 "patient_id": matched_patient["id"],
                 "patient_name": matched_patient["full_name"],
@@ -306,6 +308,7 @@ async def identity_agent_node(state: CallState, db: AsyncSession) -> Dict[str, A
                 "active_appointment_details": active_appt_details,
                 "intent": active_intent,
                 "pending_intent": active_intent,
+                "awaiting_cancel_confirmation": wants_cancel,
                 "latest_agent_speech": f"Thank you, {first_name}! Your identity has been verified. {followup}",
             }
             if not existing_appt and pending == "book" and state.get("preferred_appointment_type") == "Follow-up Consultation":
@@ -430,6 +433,7 @@ async def identity_agent_node(state: CallState, db: AsyncSession) -> Dict[str, A
                 "awaiting_identity_verification": False,
                 "active_appointment_id": active_appt_id,
                 "active_appointment_details": active_appt_details,
+                "awaiting_cancel_confirmation": bool(active_appt_id) and pending == "cancel",
                 "latest_agent_speech": speech,
             }
 
@@ -455,15 +459,15 @@ async def identity_agent_node(state: CallState, db: AsyncSession) -> Dict[str, A
             "is_verified": False,
             "awaiting_identity_verification": True,
             "verify_attempts": next_attempt,
-            "latest_agent_speech": (
+            "latest_agent_speech": dob_retry_message(user_speech) or (
                 "I couldn't verify those details from what I heard. Please say your full name, "
-                "then your date of birth slowly, for example: ???14 December 2003.???"
+                "then your date of birth slowly, for example: 14 December 2003."
             ),
         }
 
     # 4. If verification details have NOT yet been provided (or caller asks to book without identity):
     # Strict prompt requirement: Must provide Name & DOB before proceeding!
-    prompt_msg = (
+    prompt_msg = dob_retry_message(user_speech) or (
         "Before we can proceed with booking, rescheduling, or cancelling an appointment, "
         "I need to verify your identity for your medical privacy. "
         "Could you please provide your full name and date of birth? (Or let me know if you are a new patient!)"

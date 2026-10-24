@@ -128,12 +128,37 @@ def _nearest_sentence(nearest: List[Dict[str, Any]]) -> str:
     if len(groups) == 1:
         (doctor, branch), dts = next(iter(groups.items()))
         return f"The closest times with {doctor} at {branch} are {times_phrase(dts)}."
-    return "The closest times are: " + _list_text(nearest, "that day")
+    return "The closest times are " + "; ".join(
+        f"{doctor} at {branch}, {times_phrase(dts)}" for (doctor, branch), dts in groups.items()
+    ) + "."
 
 
 def _subject(slots: List[Dict[str, Any]]) -> str:
     doctors = list(dict.fromkeys(str(s.get("doctor_name") or "A doctor") for s in slots))
     return doctors[0] if len(doctors) == 1 else "These doctors"
+
+
+MAX_DOCTORS_LISTED = 4   # more doctors than this are summarised by branch instead of read out one by one
+
+
+def _crowded_summary(
+    slots: List[Dict[str, Any]], day_label: str, period: Optional[str], at_time: Optional[str] = None,
+) -> str:
+    """'On Sunday, 16 doctors have morning openings: Anna Nagar (4 doctors, 9:00 AM to 10:30 AM), ...'"""
+    by_branch: Dict[str, List[Dict[str, Any]]] = {}
+    for slot in slots:
+        by_branch.setdefault(short_branch_name(slot.get("location_name"), "our clinic"), []).append(slot)
+    doctors = {str(s.get("doctor_name")) for s in slots}
+    parts = []
+    for branch, branch_slots in by_branch.items():
+        names = {str(s.get("doctor_name")) for s in branch_slots}
+        times = [local_dt(s) for s in branch_slots]
+        parts.append(f"{branch} ({len(names)} doctor{'s' if len(names) != 1 else ''}, {_range(times)})")
+    when = f"openings at {at_time}" if at_time else (f"{period} openings" if period else "openings")
+    return (
+        f"On {day_label}, {len(doctors)} doctors have {when}: {_join(parts)}. "
+        "Tell me a specialty, branch or doctor and I will list their times."
+    )
 
 
 def day_availability_speech(
@@ -146,6 +171,15 @@ def day_availability_speech(
 ) -> Tuple[str, List[Dict[str, Any]], bool]:
     """Return (speech, slots to keep as the offered options, asks_which_period)."""
     ordered = sorted(slots, key=local_dt)
+
+    if exact_time:
+        target_minutes = exact_time[0] * 60 + exact_time[1]
+        crowded = [s for s in ordered if abs(local_dt(s).hour * 60 + local_dt(s).minute - target_minutes) <= 15]
+    else:
+        crowded = [s for s in ordered if period_of(local_dt(s)) == period] if period else ordered
+    if crowded and len(_groups(crowded)) > MAX_DOCTORS_LISTED:
+        at_time = clock(datetime(2000, 1, 1, exact_time[0], exact_time[1])) if exact_time else None
+        return _crowded_summary(crowded, day_label, period, at_time), crowded if exact_time else ordered, True
 
     if exact_time:
         target = exact_time[0] * 60 + exact_time[1]
@@ -169,6 +203,17 @@ def day_availability_speech(
         if in_period:
             return f"{_list_text(in_period, day_label)} {closing}", in_period, False
         present = [p for p in PERIODS if any(period_of(local_dt(s)) == p for s in ordered)]
+        if len(_groups(ordered)) > MAX_DOCTORS_LISTED:
+            spans = [
+                f"{p} ({_range([local_dt(s) for s in ordered if period_of(local_dt(s)) == p])})" for p in present
+            ]
+            return (
+                f"No doctors have {period} slots on {day_label}. Openings that day are in the {_join(spans)}. "
+                f"Would you like {_join([f'{_article(p)} {p} slot' for p in present], 'or')}?"
+                if present else f"There are no openings on {day_label}.",
+                ordered,
+                True,
+            )
         subject = _subject(ordered)
         verb = "don't" if subject == "These doctors" else "doesn't"
         return (
@@ -186,3 +231,47 @@ def day_availability_speech(
         ordered,
         True,
     )
+
+
+MAX_BUTTON_SLOTS = 8   # more slots than this are offered as morning / afternoon / evening buttons instead
+
+
+def chat_options(slots: Optional[List[Dict[str, Any]]]) -> List[Dict[str, str]]:
+    """Quick-reply buttons for the web chat: {"label": shown on the button, "message": sent when tapped}.
+
+    Voice and phone calls never use these; they exist only so a chat patient can tap a time
+    instead of typing it. Few slots become one button per time; many become one per period.
+    """
+    ordered = sorted(slots or [], key=local_dt)
+    if not ordered:
+        return []
+    doctors = list(dict.fromkeys(str(s.get("doctor_name") or "") for s in ordered))
+    if len(doctors) > MAX_DOCTORS_LISTED:
+        # Too many doctors to read out: narrow down by branch first.
+        branches = list(dict.fromkeys(short_branch_name(s.get("location_name"), "") for s in ordered))
+        return [{"label": branch, "message": branch} for branch in branches if branch]
+    if len(doctors) > 1:
+        # Several doctors have openings: choose the doctor, then the time.
+        return [{"label": doctor, "message": doctor} for doctor in doctors if doctor]
+    if len(ordered) > MAX_BUTTON_SLOTS:
+        options = []
+        for period in PERIODS:
+            in_period = [local_dt(s) for s in ordered if period_of(local_dt(s)) == period]
+            if in_period:
+                options.append({
+                    "label": f"{period.capitalize()} ({_range(in_period)})",
+                    "message": period,
+                })
+        return options
+    several_days = len({local_dt(s).date() for s in ordered}) > 1
+    options = []
+    for slot in ordered:
+        dt = local_dt(slot)
+        if several_days:
+            options.append({
+                "label": f"{dt.strftime('%a %d %b')}, {clock(dt)}",
+                "message": f"{clock(dt)} on {dt.strftime('%d %B')}",
+            })
+        else:
+            options.append({"label": clock(dt), "message": clock(dt)})
+    return options

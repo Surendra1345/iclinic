@@ -130,11 +130,14 @@ def parse_date_query_to_range(date_text: str):
     # A bare day is interpreted as the next occurrence in the current month,
     # moving to the next month when that day has already passed.
     if not month:
-        m4 = re.search(r"\b(?:on|the)\s+(\d{1,2})(?:st|nd|rd|th)?\b", t)
+        # "the 3 o'clock slot" / "at 3:30" name a time, not the 3rd of the month.
+        m4 = re.search(r"\b(?:on|the)\s+(\d{1,2})(?:st|nd|rd|th)?\b(?!\s*(?:am\b|pm\b|a\.m|p\.m|o'?clock\b|:))", t)
         if not m4:
             for candidate in re.finditer(r"\b(\d{1,2})(?:st|nd|rd|th)?\b", t):
                 before = t[max(0, candidate.start() - 12):candidate.start()].rstrip()
                 after = t[candidate.end():].lstrip()
+                if t[:candidate.start()].endswith(":"):
+                    continue  # the minutes of a clock time, such as the 30 in 10:30
                 if re.search(r"(?:\bat|between|from|to|and)\s*$", before):
                     continue
                 if re.match(r"(?:am|pm)\b|:|o'?clock\b", after):
@@ -193,6 +196,43 @@ def parse_date_query_to_range(date_text: str):
     return None, None
 
 
+def refers_to_past_date(text: str) -> bool:
+    """True when the patient names a day that has already gone ("yesterday", "last Monday", 12-03-2024)."""
+    import re
+    from datetime import date, datetime
+
+    lower = (text or "").lower()
+    if re.search(r"\b(?:yesterday|day before yesterday|last (?:week|month|year|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b", lower):
+        return True
+    today = datetime.now(CLINIC_TIMEZONE).date()
+    for match in re.finditer(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b", lower):
+        try:
+            if date(int(match.group(1)), int(match.group(2)), int(match.group(3))) < today:
+                return True
+        except ValueError:
+            pass
+    for match in re.finditer(r"\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b", lower):
+        try:
+            if date(int(match.group(3)), int(match.group(2)), int(match.group(1))) < today:
+                return True
+        except ValueError:
+            pass
+    return False
+
+
+def refers_to_discussed_day(text: str) -> bool:
+    """True when the patient points back at the day already being discussed ("that day", "same date")."""
+    import re
+    return bool(re.search(r"\b(?:that|same|this)\s+(?:day|date)\b", (text or "").lower()))
+
+
+def discussed_date_range(saved_date):
+    """UTC range for the day already under discussion (state ``preferred_date``), or (None, None)."""
+    if not saved_date:
+        return None, None
+    return parse_date_query_to_range(str(saved_date)[:10])
+
+
 def has_date_reference(text: str) -> bool:
     """Detect an attempted date even when the date parser cannot validate it."""
     import re
@@ -204,7 +244,7 @@ def has_date_reference(text: str) -> bool:
         or re.search(rf"\b(?:{weekday}|today|tomorrow)\b", lower)
         or re.search(r"\b\d{4}-\d{1,2}-\d{1,2}\b", lower)
         or re.search(r"\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b", lower)
-        or re.search(r"\b(?:on|the)\s+\d{1,2}(?:st|nd|rd|th)?\b", lower)
+        or re.search(r"\b(?:on|the)\s+\d{1,2}(?:st|nd|rd|th)?\b(?!\s*(?:am\b|pm\b|a\.m|p\.m|o'?clock\b|:))", lower)
     )
 
 

@@ -1,10 +1,11 @@
 """Notification service — handles SMS and email confirmations and staff alerts."""
 import asyncio
 import logging
+import re
 import smtplib
 import uuid
 from email.message import EmailMessage
-from typing import Optional
+from typing import Awaitable, Callable, Optional, TypeVar
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +15,41 @@ from src.data.repositories.notification_repository import NotificationRepository
 from src.handlers.http_clients.twilio_service import TwilioService
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+
+def _is_permanent(exc: Exception) -> bool:
+    """True for failures a retry cannot fix: a rejected number or address, or bad credentials."""
+    if isinstance(exc, (smtplib.SMTPAuthenticationError, smtplib.SMTPRecipientsRefused)):
+        return True
+    match = re.search(r"HTTP (4\d\d)", str(exc))
+    return bool(match) and int(match.group(1)) not in (408, 429)
+
+
+async def _with_retries(send: Callable[[], Awaitable[T]], what: str) -> T:
+    """Run a delivery attempt up to NOTIFICATION_RETRY_ATTEMPTS times before giving up."""
+    attempts = max(1, settings.NOTIFICATION_RETRY_ATTEMPTS)
+    for attempt in range(1, attempts + 1):
+        try:
+            return await send()
+        except Exception as exc:
+            if attempt == attempts or _is_permanent(exc):
+                raise
+            logger.warning("%s failed (attempt %d/%d): %s", what, attempt, attempts, exc)
+            await asyncio.sleep(settings.NOTIFICATION_RETRY_DELAY_SECONDS * attempt)
+    raise RuntimeError("unreachable")
+
+
+def _detail_lines(location_name: Optional[str], appointment_type: Optional[str], instructions: Optional[str]) -> list[str]:
+    lines = []
+    if location_name:
+        lines.append(f"Branch: {location_name}")
+    if appointment_type:
+        lines.append(f"Visit type: {appointment_type}")
+    if instructions:
+        lines.append(f"Please note: {instructions}")
+    return lines
 
 
 class NotificationService:
@@ -32,6 +68,9 @@ class NotificationService:
         doctor_name: str,
         start_time_str: str,
         action: str = "booked",  # "booked" | "rescheduled" | "cancelled"
+        location_name: Optional[str] = None,
+        appointment_type: Optional[str] = None,
+        instructions: Optional[str] = None,
     ) -> bool:
         """Send appointment SMS confirmation and log to DB."""
         if action == "booked":
@@ -51,6 +90,11 @@ class NotificationService:
                 f"{start_time_str} has been cancelled. Thank you, {settings.CLINIC_NAME}."
             )
 
+        if action != "cancelled":
+            extras = _detail_lines(location_name, appointment_type, instructions)
+            if extras:
+                message = f"{message} " + " ".join(line if line.endswith(".") else f"{line}." for line in extras)
+
         # Log pending notification in DB
         notif = await self.notification_repo.create_notification(
             appointment_id=appointment_id,
@@ -60,7 +104,10 @@ class NotificationService:
         )
 
         try:
-            resp = self.twilio_service.send_sms(to_phone, message)
+            async def send():
+                return await asyncio.to_thread(self.twilio_service.send_sms, to_phone, message)
+
+            resp = await _with_retries(send, f"SMS to {to_phone}")
             await self.notification_repo.mark_sent(notif.id, provider_response=resp)
             return True
         except Exception as e:
@@ -77,6 +124,9 @@ class NotificationService:
         doctor_name: str,
         start_time_str: str,
         action: str = "booked",
+        location_name: Optional[str] = None,
+        appointment_type: Optional[str] = None,
+        instructions: Optional[str] = None,
     ) -> bool:
         """Send an appointment email through the configured SMTP server."""
         notif = await self.notification_repo.create_notification(
@@ -103,13 +153,15 @@ class NotificationService:
                 doctor_name=doctor_name,
                 start_time_str=start_time_str,
                 action=action,
+                location_name=location_name,
+                appointment_type=appointment_type,
+                instructions=instructions,
             )
-            response = await asyncio.to_thread(
-                self._send_smtp_email,
-                to_email,
-                subject,
-                body,
-            )
+
+            async def send():
+                return await asyncio.to_thread(self._send_smtp_email, to_email, subject, body)
+
+            response = await _with_retries(send, f"Email to {to_email}")
             await self.notification_repo.mark_sent(notif.id, provider_response=response)
             return True
         except Exception as e:
@@ -124,6 +176,9 @@ class NotificationService:
         doctor_name: str,
         start_time_str: str,
         action: str,
+        location_name: Optional[str] = None,
+        appointment_type: Optional[str] = None,
+        instructions: Optional[str] = None,
     ) -> tuple[str, str]:
         if action == "booked":
             subject = "Appointment confirmed"
@@ -135,11 +190,14 @@ class NotificationService:
             subject = "Appointment cancelled"
             opening = "Your appointment has been cancelled."
 
+        extras = _detail_lines(location_name, appointment_type, instructions) if action != "cancelled" else []
+        details = "".join(f"{line}\n" for line in extras)
         body = (
             f"Hello {patient_name},\n\n"
             f"{opening}\n\n"
             f"Doctor: {doctor_name}\n"
             f"Clinic: {settings.CLINIC_NAME}\n"
+            f"{details}"
             f"Appointment time: {start_time_str}\n\n"
             f"Thank you,\n{settings.CLINIC_NAME}"
         )
