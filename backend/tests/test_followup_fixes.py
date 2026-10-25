@@ -1077,3 +1077,18 @@ def test_clinic_hours_questions_are_recognised_in_common_wordings():
     for text in ("What are the timings of the clinic?", "clinic opening timings", "what are your clinic hours", "hours of the clinic"):
         assert _asks_clinic_hours(text), text
     assert not _asks_clinic_hours("what time is my appointment")
+
+
+def test_asking_for_another_doctor_with_an_active_appointment_reschedules(unsure_classifier):
+    active = {"appointment_id": "a1", "doctor_name": "Dr. Shalini Sundaram", "specialty": "Dermatology"}
+    for text in ("I want to reschedule my appointment with another doctor", "can I see a different doctor"):
+        state = {
+            "latest_user_speech": text, "intent": "book", "is_verified": True,
+            "active_appointment_id": "a1", "active_appointment_details": active, "channel": "chat",
+        }
+        assert _route(state)["intent"] == "reschedule", text
+
+
+def test_asking_for_another_doctor_without_an_appointment_keeps_booking(unsure_classifier):
+    state = {"latest_user_speech": "show me a different doctor", "intent": "book", "is_verified": True, "channel": "chat"}
+    assert _route(state)["intent"] == "book"

@@ -1075,7 +1075,8 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
         and state.get("is_verified")
         and any(phrase in lower for phrase in _OTHER_DOCTOR_PHRASES)
     ):
-        return {"intent": current_intent}
+        # A patient who already has an appointment can only move it, so another doctor means a reschedule.
+        return {"intent": "reschedule" if has_active_appt else current_intent}
 
     # ── 2. STATE-AWARE LLM INTENT CLASSIFIER ──────────────────────────────────
 
