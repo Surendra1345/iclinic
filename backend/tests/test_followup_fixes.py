@@ -1045,3 +1045,35 @@ def test_translation_names_the_script_and_asks_again_when_the_script_is_wrong(mo
     import pytest
     with pytest.raises(RuntimeError, match="translation unavailable"):
         asyncio.run(va._translate("Hello", "te-IN"))
+
+
+def test_declining_a_cancellation_to_reschedule_starts_the_reschedule(unsure_classifier):
+    state = {"latest_user_speech": "No, I want to reschedule it.", "awaiting_cancel_confirmation": True, "channel": "outbound_call"}
+    result = _route(state)
+    assert result["intent"] == "reschedule"
+    assert result["awaiting_cancel_confirmation"] is False
+
+
+def test_plain_no_to_a_cancellation_still_keeps_the_appointment(unsure_classifier):
+    state = {"latest_user_speech": "no", "awaiting_cancel_confirmation": True, "channel": "outbound_call"}
+    assert _route(state)["intent"] == "cancel"
+
+
+def test_clear_reschedule_request_skips_the_model(monkeypatch):
+    from src.control.agents.nodes.detect_intent import intent_classification_service
+
+    async def boom(*args, **kwargs):
+        raise AssertionError("the classifier should not be called")
+
+    monkeypatch.setattr(intent_classification_service, "classify_intent", boom)
+    for text in ("I want to reschedule my appointment.", "I would like to reschedule", "Reschedule please"):
+        state = {"latest_user_speech": text, "is_verified": True, "channel": "outbound_call"}
+        assert _route(state)["intent"] == "reschedule", text
+
+
+def test_clinic_hours_questions_are_recognised_in_common_wordings():
+    from src.control.agents.nodes.faq import _asks_clinic_hours
+
+    for text in ("What are the timings of the clinic?", "clinic opening timings", "what are your clinic hours", "hours of the clinic"):
+        assert _asks_clinic_hours(text), text
+    assert not _asks_clinic_hours("what time is my appointment")

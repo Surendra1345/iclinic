@@ -1,4 +1,5 @@
 """Grounded answers to public clinic information questions."""
+import asyncio
 import logging
 import re
 from collections import defaultdict
@@ -34,7 +35,10 @@ def _asks_clinic_hours(question: str) -> bool:
         "when does the clinic close", "when does clinic close",
         "what time is the clinic open", "what time is clinic open",
     )
-    return any(phrase in normalized for phrase in phrases)
+    if any(phrase in normalized for phrase in phrases):
+        return True
+    # "What are the timings of the clinic", "clinic opening timings", "hours of the clinic"
+    return bool(re.search(r"\b(?:timings?|hours)\b.{0,12}\bclinic\b|\bclinic\b.{0,12}\b(?:timings?|hours)\b", normalized))
 
 
 _AVAILABILITY_WORDS = re.compile(
@@ -325,9 +329,12 @@ async def faq_agent_node(state: CallState, db: AsyncSession) -> Dict[str, Any]:
     )
     llm_answered = False
     try:
-        answer = await GeminiService().generate_content(
+        generate = GeminiService().generate_content(
             prompt, temperature=0.1, max_output_tokens=settings.GEMINI_ANSWER_MAX_TOKENS
         )
+        # Twilio drops a call whose reply takes more than a few seconds, so a phone answer is capped.
+        on_call = str(state.get("channel") or "") == "outbound_call"
+        answer = await (asyncio.wait_for(generate, timeout=3.5) if on_call else generate)
         llm_answered = bool(answer)
     except Exception:
         logger.exception("FAQ response generation failed")
