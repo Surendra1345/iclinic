@@ -769,11 +769,12 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
         return {"intent": "identity"}
 
     # Cancellation confirmation gate
-    if (
-        state.get("awaiting_cancel_confirmation")
-        and (is_explicit_confirmation(user_speech) or is_explicit_rejection(user_speech))
-    ):
-        return {"intent": "cancel"}
+    if state.get("awaiting_cancel_confirmation"):
+        # "No, I want to reschedule it" declines the cancellation but asks for something else.
+        if any(phrase in lower for phrase in ("reschedule", "move appointment", "change appointment")):
+            return {"intent": "reschedule", "awaiting_change_action_choice": False, "awaiting_cancel_confirmation": False}
+        if is_explicit_confirmation(user_speech) or is_explicit_rejection(user_speech):
+            return {"intent": "cancel"}
 
     # Reschedule vs cancel ambiguity resolution
     asks_reschedule = any(phrase in lower for phrase in (
@@ -1101,6 +1102,13 @@ async def detect_intent_node(state: CallState, db: AsyncSession) -> Dict[str, An
     if recent_dialogue:
         context_parts.append("Recent dialogue (PII redacted):\n" + recent_dialogue)
     conversation_context = "; ".join(context_parts) if context_parts else None
+
+    # A clear request to reschedule needs no model call; on a phone call every second of delay risks the line.
+    if (
+        not explicit_cancel
+        and re.search(r"^\W*(?:please\s+)?re-?schedule\b|\b(?:want|need|like|wish|please|can|could|would|to)\b.{0,20}\bre-?schedule\b", lower)
+    ):
+        return {"intent": "reschedule"}
 
     classification = await intent_classification_service.classify_intent(
         user_message=user_speech,
