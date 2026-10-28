@@ -1,0 +1,23 @@
+# ngrok tunnels for iClinic. No auth token here: that stays in your own ngrok config
+# (C:\Users\User\AppData\Local\ngrok\ngrok.yml), and the command below loads both files.
+#
+# Start ONE of these (from the project folder):
+#
+#   Phone calls (what you run today): Twilio reaches the backend directly on port 8000
+#     ngrok start backend --config "C:\Users\User\AppData\Local\ngrok\ngrok.yml" --config ngrok.yml
+#
+#   Website plus Twilio through one address: nginx on port 3000 forwards /api/, /twilio/ and /health
+#   to the backend. If you use this, set NGROK_URL in .env to the address ngrok prints, then
+#   recreate the backend (docker compose up -d --force-recreate backend).
+#     ngrok start frontend --config "C:\Users\User\AppData\Local\ngrok\ngrok.yml" --config ngrok.yml
+#
+# Starting both at once (ngrok start --all ...) depends on your ngrok plan.
+version: "2"
+tunnels:
+  backend:
+    proto: http
+    addr: 8000
+    domain: foam-jury-quality.ngrok-free.dev   # your static domain; must match NGROK_URL in .env
+  frontend:
+    proto: http
+    addr: 3000
