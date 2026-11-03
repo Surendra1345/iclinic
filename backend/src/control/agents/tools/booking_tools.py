@@ -1,4 +1,4 @@
-"""Booking tools ??? checking active appointments and creating bookings."""
+"""Booking tools: look up a patient's active appointment, and create a booking."""
 import uuid
 from src.config.settings import settings
 from typing import Any, Dict, Optional
@@ -16,12 +16,20 @@ from src.core.services.appointment_service import AppointmentService
 
 
 async def check_patient_active_appointment(patient_id_str: str, db: AsyncSession) -> Optional[Dict[str, Any]]:
-    """
-    Check if patient already has an active (booked) appointment.
-    Returns details if exists, or None.
+    """Find the patient's one active (booked) appointment.
+
+    WHAT IT DOES: read-only lookup. Used before booking (a patient may hold only one active
+    appointment) and before rescheduling or cancelling (to know which appointment is meant).
+    INPUT: patient_id_str, the patient's id.
+    RETURNS: None when the patient has no active appointment. Otherwise appointment_id, slot_id,
+    status, doctor_name, specialty, location_name, start_time (ISO) and formatted_speech.
+    CHANGES NOTHING except that an appointment whose time has already passed is marked completed first,
+    so it never counts as active.
     """
     repo = AppointmentRepository(db)
     patient_id = uuid.UUID(patient_id_str)
+    # An appointment whose time has passed is no longer active; it is completed here.
+    await repo.complete_past_for_patient(patient_id)
     appt = await repo.get_active_for_patient(patient_id)
     if not appt:
         return None
@@ -54,7 +62,18 @@ async def book_appointment(
     reason: Optional[str] = None,
     appointment_type_name: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Execute atomic booking."""
+    """Book a slot that is already held for this patient.
+
+    WHAT IT DOES: turns a held slot into a confirmed appointment in one transaction. Only call it after
+    identity is confirmed, a slot is held, and the patient answered a clear yes to the confirmation
+    question asked in the previous turn.
+    INPUT: patient_id_str, slot_id_str (the held slot), conversation_id_str (links the appointment to the
+    chat or call), reason (short visit reason, optional), appointment_type_name (must be an active type;
+    "General Consultation" is used when none is given).
+    RETURNS: appointment_id, status and slot_id of the new appointment.
+    RAISES: ValueError if the appointment type is not configured; AppointmentServiceError if the slot does
+    not exist, is in the past, is already booked, or the patient already has an active appointment.
+    """
     service = AppointmentService(db)
     patient_id = uuid.UUID(patient_id_str)
     slot_id = uuid.UUID(slot_id_str)

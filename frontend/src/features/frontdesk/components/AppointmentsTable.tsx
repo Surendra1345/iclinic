@@ -12,6 +12,7 @@ import {
   X,
   RotateCcw,
   ArrowDownUp,
+  CheckCircle2,
 } from 'lucide-react'
 import { Card } from '../../../components/ui/Card'
 import { Input } from '../../../components/ui/Input'
@@ -19,7 +20,7 @@ import { Select } from '../../../components/ui/Select'
 import { Button } from '../../../components/ui/Button'
 import { StatusBadge } from './StatusBadge'
 import { RefreshButton } from './RefreshButton'
-import { useAppointments, useAppointmentTypes, useClinicLocations } from '../queries/frontdeskQueries'
+import { useAppointments, useAppointmentTypes, useClinicLocations, useMarkAppointmentCompleted } from '../queries/frontdeskQueries'
 import { ConfirmationBadge } from './ConfirmationBadge'
 import {
   APPOINTMENT_SORT_OPTIONS,
@@ -51,6 +52,20 @@ export const AppointmentsTable: React.FC = () => {
     }, 250)
     return () => clearTimeout(timer)
   }, [searchQuery])
+
+  const markCompleted = useMarkAppointmentCompleted()
+  const [completingId, setCompletingId] = useState<string | null>(null)
+  const [completeError, setCompleteError] = useState<string | null>(null)
+
+  const handleMarkCompleted = (id: string, patient: string) => {
+    if (!window.confirm(`Mark ${patient}'s appointment as completed?`)) return
+    setCompletingId(id)
+    setCompleteError(null)
+    markCompleted.mutate(id, {
+      onError: () => setCompleteError('Could not mark the appointment as completed. Please try again.'),
+      onSettled: () => setCompletingId(null),
+    })
+  }
 
   const { data: locationsData } = useClinicLocations()
   const { data: appointmentTypes } = useAppointmentTypes()
@@ -421,6 +436,18 @@ export const AppointmentsTable: React.FC = () => {
                         <StatusBadge status={appt.status} />
                         <ConfirmationBadge status={appt.confirmation_status} />
                       </div>
+                      {(appt.status === 'booked' || appt.status === 'rescheduled') && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="mt-2"
+                          leftIcon={<CheckCircle2 className="w-3.5 h-3.5" />}
+                          isLoading={completingId === appt.id}
+                          onClick={() => handleMarkCompleted(appt.id, appt.patient_name)}
+                        >
+                          Mark completed
+                        </Button>
+                      )}
                       {(appt.appointment_type || appt.channel) && (
                         <p className="text-[11px] text-[#64748B] mt-1">
                           {[appt.appointment_type, appt.channel?.replace('_', ' ')].filter(Boolean).join(' · ')}
@@ -438,6 +465,10 @@ export const AppointmentsTable: React.FC = () => {
             </tbody>
           </table>
         </div>
+
+        {completeError && (
+          <div className="py-2 px-4 bg-[#FFE4E6] border-t border-[#FECDD3] text-xs text-[#E11D48]">{completeError}</div>
+        )}
 
         {/* Footer info bar */}
         <div className="py-3 px-4 bg-[#F1F5F9] border-t border-[#E2E8F0] text-xs text-[#475569] flex items-center justify-between">

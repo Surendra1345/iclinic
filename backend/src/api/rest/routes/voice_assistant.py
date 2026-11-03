@@ -14,7 +14,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from src.config.settings import settings
-from src.control.agents.tools.registration_tools import is_greeting
+from src.control.agents.state import build_input_state
 from src.data.clients.postgres import AsyncSessionLocal
 from src.data.repositories.conversation_repository import ConversationRepository
 from src.handlers.http_clients.gemini_service import GeminiService
@@ -327,77 +327,16 @@ async def process_voice_turn(
                 call_sid=session_id,
             )
 
-        saved_details = (
-            dict(existing_conversation.collected_details or {})
-            if existing_conversation
-            else {}
-        )
-        patient_name = (
-            saved_details.get("patient_name")
-            or saved_details.get("registration_name")
-            if not is_greeting(saved_details.get("patient_name") or saved_details.get("registration_name", ""))
-            else None
-        )
-        patient_dob = saved_details.get("patient_dob") or saved_details.get("registration_dob")
-
-        input_state = {
-            "call_sid": session_id,
-            "conversation_id": str(existing_conversation.id),
-            "patient_id": str(existing_conversation.patient_id) if existing_conversation and existing_conversation.patient_id else saved_details.get("patient_id"),
-            "patient_phone": saved_details.get("patient_phone", ""),
-            "patient_name": patient_name,
-            "patient_dob": patient_dob,
-            "channel": "voice_assistant",
-            "latest_user_speech": agent_input,
-            "messages": list(existing_conversation.messages or []),
-            "is_verified": bool(
-                existing_conversation.identity_verified_at
-                or saved_details.get("is_verified", False)
-            ),
-            "is_new_patient": bool(saved_details.get("is_new_patient")),
-            "awaiting_identity_verification": bool(saved_details.get("awaiting_identity_verification")),
-            "pending_intent": saved_details.get("pending_intent"),
-            "intent": saved_details.get("intent"),
-            "preferred_language": language,
-            "language_confirmed": confidence >= settings.VOICE_ASSISTANT_LANGUAGE_CONFIDENCE_THRESHOLD,
-            "language_confidence": confidence,
-        }
-        for field in (
-            "patient_id",
-            "patient_phone",
-            "patient_email",
-            "target_slot_id",
-            "target_slot_details",
-            "offered_slots",
-            "active_appointment_id",
-            "active_appointment_details",
-            "preferred_specialty",
-            "preferred_location",
-            "preferred_doctor",
-            "preferred_date",
-            "preferred_appointment_type",
-            "awaiting_followup_visit",
-            "followup_candidates",
-            "awaiting_followup_decision",
-            "awaiting_preferred_date",
-            "awaiting_patient_email",
-            "awaiting_cancel_confirmation",
-            "awaiting_change_action_choice",
-            "verify_attempts",
-            "handoff_required",
-            "handoff_reason",
-            "awaiting_handoff_contact",
-            "handoff_completed",
-            "frontdesk_alert_sent",
-            "is_emergency",
-        ):
-            if field in saved_details:
-                input_state[field] = saved_details[field]
-
-        input_state["latest_agent_speech"] = next(
-            (message.get("content") for message in reversed(existing_conversation.messages or [])
-             if message.get("role") == "agent"),
-            "",
+        input_state = build_input_state(
+            existing_conversation,
+            channel="voice_assistant",
+            call_sid=session_id,
+            speech=agent_input,
+            extra={
+                "preferred_language": language,
+                "language_confirmed": confidence >= settings.VOICE_ASSISTANT_LANGUAGE_CONFIDENCE_THRESHOLD,
+                "language_confidence": confidence,
+            },
         )
 
         try:

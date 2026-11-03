@@ -1,5 +1,8 @@
-"""Registration tools ??? validate DOB and register new patients."""
-import difflib
+"""Patient registration actions and the input checks the code enforces itself.
+
+The model extracts a name, date of birth, email and phone from what the patient said; these helpers
+only validate those values and write the patient record. They do no free-text interpretation.
+"""
 import re
 from datetime import date, datetime
 from typing import Optional
@@ -12,154 +15,22 @@ from src.data.models.postgres.patient import Patient
 from src.data.repositories.appointment_repository import AppointmentRepository
 from src.data.repositories.patient_repository import PatientRepository
 
-
-_GREETING_WORDS = {
-    "hello",
-    "hey",
-    "hi",
-    "hii",
-    "hlo",
-    "hloo",
-    "hullo",
-    "hey there",
-    "hello there",
-    "good morning",
-    "good afternoon",
-    "good evening",
-}
-
-EMAIL_REGEX = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,7}\b")
-PHONE_REGEX = re.compile(r"(?:\+91[\-\s]?)?[6-9]\d{9}\b")
+_EMAIL = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
 
-def is_greeting(text: str) -> bool:
-    """Return True when text is a casual greeting, not a patient name or instruction."""
-    cleaned = re.sub(r"[^a-z\s]", " ", text.strip().lower())
-    cleaned = " ".join(cleaned.split())
-    if cleaned in _GREETING_WORDS:
-        return True
-    normalized = re.sub(r"[^a-z\s]", " ", cleaned)
-    words = normalized.split()
-    if not words:
-        return False
-    if len(words) == 1:
-        word = re.sub(r"(.)\1+", r"\1", words[0])
-        return word in {"hello", "hey", "hi", "hlo", "hullo"}
-    if len(words) == 2 and words[0] in {"good", "hey", "hello"}:
-        return f"{words[0]} {words[1]}" in _GREETING_WORDS
-    return False
+def valid_email(value: Optional[str]) -> Optional[str]:
+    """The address in canonical form when it looks like an email, otherwise None."""
+    cleaned = (value or "").strip().strip(".,;").lower()
+    return cleaned if _EMAIL.match(cleaned) else None
 
 
-_CLOSING_PHRASES = [
-    "thank you for your conformation",
-    "thank you for your confirmation",
-    "thank you for confirming",
-    "thanks for confirming",
-    "thanks for the confirmation",
-    "thank you for the confirmation",
-    "thank you for the information",
-    "thanks for the information",
-    "thank you for the info",
-    "thanks for the info",
-    "thank you for letting me know",
-    "thanks for letting me know",
-    "thank you for your help",
-    "thanks for your help",
-    "thank you so much",
-    "thank you very much",
-    "thanks a lot",
-    "that's all thank you",
-    "that is all thank you",
-    "that will be all thank you",
-    "that's all thanks",
-    "that's all",
-    "that is all",
-    "that will be all",
-    "that's it thank you",
-    "that's it",
-    "no thank you",
-    "no thanks",
-    "no that's fine",
-    "no that's okay",
-    "no that's alright",
-    "i'm good thank you",
-    "i am good thank you",
-    "i'm good thanks",
-    "have a good day",
-    "have a nice day",
-    "have a great day",
-    "take care",
-    "goodbye",
-    "bye bye",
-    "bye",
-]
-
-_EXACT_THANKS = {
-    "thank you",
-    "thankyou",
-    "thanks",
-    "thx",
-    "thank u",
-    "ok thank you",
-    "okay thank you",
-    "ok thanks",
-    "okay thanks",
-    "alright thank you",
-    "all right thank you",
-    "no thank you",
-    "no thanks",
-}
-
-
-def is_closing_or_thanks(text: str) -> bool:
-    """Return True when text expresses gratitude, acknowledgement, or closing rather than a new action."""
-    cleaned = text.strip().lower()
-    cleaned_no_punct = re.sub(r"[^\w\s]", " ", cleaned)
-    cleaned_norm = " ".join(cleaned_no_punct.split())
-
-    if cleaned_norm in _EXACT_THANKS or cleaned in _EXACT_THANKS:
-        return True
-
-    for phrase in _CLOSING_PHRASES:
-        if phrase in cleaned_norm or phrase in cleaned:
-            remaining = cleaned_norm.replace(phrase, " ")
-            rem_words = remaining.split()
-            if any(act in rem_words for act in ["book", "reschedule", "cancel", "doctor"]):
-                return False
-            return True
-
-    words = cleaned_norm.split()
-    if words and (words[0] in {"thanks", "thankyou"} or (len(words) >= 2 and words[0] == "thank" and words[1] == "you")):
-        if not any(act in words for act in ["book", "reschedule", "cancel", "doctor", "dr"]):
-            return True
-    if words and (words[-1] in {"thanks", "thankyou"} or (len(words) >= 2 and words[-2] == "thank" and words[-1] == "you")):
-        if not any(act in words for act in ["book", "reschedule", "cancel", "doctor", "dr"]):
-            return True
-
-    return False
-
-
-def extract_email(text: str) -> Optional[str]:
-    """Extract standard email address from text."""
-    match = EMAIL_REGEX.search(text)
-    return match.group(0).lower() if match else None
-
-
-def extract_phone(text: str) -> Optional[str]:
-    """Extract standard 10-digit mobile number from text."""
-    match = PHONE_REGEX.search(text)
-    if match:
-        raw = match.group(0)
-        digits = re.sub(r"\D", "", raw)
-        if len(digits) == 10:
-            return f"+91{digits}"
-        if len(digits) == 12 and digits.startswith("91"):
-            return f"+{digits}"
+def normalise_phone(value: Optional[str]) -> Optional[str]:
+    """+91XXXXXXXXXX for a 10-digit Indian mobile or a 12-digit number starting 91, else None."""
+    digits = re.sub(r"\D", "", value or "")
+    if len(digits) == 10 and digits[0] in "6789":
+        return f"+91{digits}"
+    if len(digits) == 12 and digits.startswith("91") and digits[2] in "6789":
         return f"+{digits}"
-    # General fallback for any 10 consecutive digits
-    m10 = re.search(r"\b\d{10}\b", text)
-    if m10:
-        return f"+91{m10.group(0)}"
     return None
 
 
@@ -248,146 +119,6 @@ def validate_dob(dob_str: str) -> tuple[bool, Optional[date], str]:
         return False, None, "Date of birth cannot be in the future."
 
     return True, parsed_date, ""
-
-
-def dob_retry_message(speech: str) -> Optional[str]:
-    """Spoken reason a date of birth was rejected, or None when the speech holds no date attempt."""
-    from src.control.agents.tools.slot_tools import has_date_reference
-
-    text = speech or ""
-    if re.search(r"\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2}\b(?!\d)", text):
-        return "Please say the full four-digit year of your date of birth, for example 3 September 2004."
-    if not (re.search(r"\d{4}", text) or has_date_reference(text)):
-        return None
-    is_valid, _, error = validate_dob(text)
-    if is_valid:
-        return None
-    if "future" in error or "range" in error:
-        reason = "That date of birth doesn't look right."
-    else:
-        reason = "I couldn't read that date of birth."
-    return f"{reason} Please say it again with the day, month name and full year, for example 14 August 2004."
-
-
-_KEYBOARD_RUNS = (
-    "qwer", "wert", "erty", "rtyu", "tyui", "yuio", "uiop", "asdf", "sdfg", "dfgh", "fghj", "ghjk", "hjkl",
-    "zxcv", "xcvb", "cvbn", "vbnm", "qazw", "wsxe",
-)
-
-
-_VOWELLESS_WORDS = {"hmm", "hmmm", "mmm", "shh", "psst", "tsk", "brr", "pls", "plz", "thx", "nth", "cry", "dry", "fly", "sky", "try", "why", "gym", "myth", "lynx"}
-
-
-def _is_gibberish_word(word: str) -> bool:
-    if word in _VOWELLESS_WORDS:
-        return False
-    if any(run in word for run in _KEYBOARD_RUNS):
-        return True
-    if re.search(r"(.)\1{2,}", word):                       # the same letter three times in a row
-        return True
-    if len(word) >= 3 and not re.search(r"[aeiouy]", word):  # no vowel at all
-        return True
-    return bool(re.search(r"[^aeiouy]{5,}", word))           # five consonants in a row
-
-
-def looks_like_gibberish(text: str) -> bool:
-    """True when any word is keyboard mashing or something no person is called ("asdf qwer", "xkcdfgh", "aaaa")."""
-    return any(_is_gibberish_word(word) for word in re.findall(r"[a-z]+", (text or "").lower()))
-
-
-def is_all_gibberish(text: str) -> bool:
-    """True when the whole short message is nonsense, so it can be answered with "that is not a name"."""
-    words = re.findall(r"[a-z]+", (text or "").lower())
-    return 1 <= len(words) <= 4 and all(_is_gibberish_word(word) for word in words)
-
-
-def is_invalid_name(text: str) -> bool:
-    """Check if the provided name is a conversational phrase rather than a real name."""
-    cleaned = text.strip().lower()
-    if is_greeting(cleaned) or looks_like_gibberish(cleaned):
-        return True
-    phrases = [
-        "reschedule", "appointment", "booking", "book", "cancel",
-        "doctor", "checkup", "consult", "i need", "i want", "i am looking",
-        "help", "hi", "hello", "new patient", "register", "please", "yes", "no",
-        "thank you", "thankyou", "thanks", "thank u", "could you", "can you",
-        "what is", "where is", "available"
-    ]
-    if any(re.search(rf"\b{re.escape(phrase)}\b", cleaned) for phrase in phrases):
-        return True
-    words = cleaned.split()
-    if len(words) > 4 or len(words) == 0:
-        return True
-    return False
-
-
-_NON_NAME_WORDS = {
-    "i", "im", "i'm", "am", "are", "is", "was", "were", "have", "has", "had",
-    "my", "me", "you", "your", "we", "our", "they", "this", "that", "these",
-    "those", "the", "a", "an", "and", "or", "but", "to", "for", "with", "at",
-    "from", "of", "on", "in", "it", "please", "can", "could", "would", "will",
-    "want", "need", "like", "forward", "transfer", "connect", "send", "talk", "speak",
-    "frontdesk", "front", "desk", "receptionist", "staff", "human", "help", "hello",
-    "hi", "hey", "thanks", "thank", "thankyou", "okay", "ok", "skip", "book",
-    "appointment", "schedule", "cancel", "reschedule", "doctor", "pain", "stomach",
-    "fever", "cough", "headache", "chest", "sick", "hurt", "hurts", "symptoms",
-    # Interrogatives/explanatory terms make short questions look like names if
-    # they are omitted (for example, "what does Python mean?").
-    "what", "does", "do", "did", "how", "why", "when", "where", "which",
-    "who", "whose", "whom", "mean", "meaning", "explain", "define", "tell",
-    "show", "list", "available", "branch", "branches", "clinic", "service",
-}
-
-
-_NAME_INTRO = re.compile(
-    r"^(?:(?:hello|hi|hey|yes|yeah|okay|ok|sure)[\s,!.]*)?"
-    r"(?:my (?:full )?name is|my name's|name is|i am|i'm|im|this is|it is|it's|its|call me|they call me|you can call me)\s+",
-    re.IGNORECASE,
-)
-_NAME_CORRECTION = re.compile(
-    r"\b(?:(?:this|that|it)(?: is|'s| was)? not my name|not my name|wrong name|that(?:'s| is) wrong|"
-    r"(?:that|this)(?: is|'s) not me|that name is wrong|isn't my name|is not my name)\b",
-    re.IGNORECASE,
-)
-
-
-def strip_name_intro(text: str) -> str:
-    """'My name is Sonia' -> 'Sonia'."""
-    return _NAME_INTRO.sub("", (text or "").strip(), count=1).strip()
-
-
-def is_name_correction(text: str) -> bool:
-    """The patient says the name we captured is wrong ("this is not my name")."""
-    return bool(_NAME_CORRECTION.search(text or ""))
-
-
-def name_from_speech(text: str) -> Optional[str]:
-    """A bare name, with or without an introduction ("Sonia", "my name is Sonia"); else None."""
-    cleaned = strip_name_intro(text)
-    return re.sub(r"[.!?,;:]+$", "", cleaned).strip().title() if is_name_only_candidate(cleaned) else None
-
-
-def names_a_clinic_term(text: str) -> bool:
-    """True when the reply is a specialty or branch of the clinic ("Gynecology", "Velachery"), not a person's name."""
-    from src.control.agents.tools import clinic_directory
-
-    if clinic_directory.specialty_in_text(text or "") is not None:
-        return True
-    return clinic_directory.match_branch(text or "") is not None
-
-
-def is_name_only_candidate(text: str) -> bool:
-    """Accept only short, name-like replies; reject ordinary phrases and requests."""
-    cleaned = re.sub(r"[.!?,;:]+$", "", strip_name_intro(text or ""))
-    words = cleaned.split()
-    if not 1 <= len(words) <= 4 or is_invalid_name(cleaned) or names_a_clinic_term(cleaned):
-        return False
-    if any(word.lower().strip("'’-") in _NON_NAME_WORDS for word in words):
-        return False
-    return all(
-        word.replace("'", "").replace("’", "").replace("-", "").isalpha()
-        for word in words
-    )
 
 
 async def register_new_patient(

@@ -137,8 +137,8 @@ def create_app() -> FastAPI:
     async def metrics():
         return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
-    @app.get("/internal/diagnostics/intent-classifier", include_in_schema=False)
-    async def intent_classifier_diagnostics(
+    @app.get("/internal/diagnostics/llm", include_in_schema=False)
+    async def llm_diagnostics(
         x_diagnostics_key: str = Header(default="", alias="X-Diagnostics-Key"),
     ):
         configured_key = settings.DIAGNOSTICS_API_KEY
@@ -146,7 +146,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Not found")
         if not hmac.compare_digest(x_diagnostics_key, configured_key):
             raise HTTPException(status_code=404, detail="Not found")
-        from src.core.services.intent_classification_service import intent_classification_service
-        return intent_classification_service.get_latency_stats()
+        from src.core.services.llm_service import llm_service
+        return llm_service.get_stats()
 
     return app

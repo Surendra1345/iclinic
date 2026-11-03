@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     VOICE_ASSISTANT_TTS_ENABLED: bool = os.getenv(
         "VOICE_ASSISTANT_TTS_ENABLED", "true"
     ).lower() == "true"
-    GEMINI_FALLBACK_MODEL: str = os.getenv("GEMINI_FALLBACK_MODEL", "")
+    GEMINI_FALLBACK_MODEL: str = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.8-flash")
     GEMINI_RETRY_DELAY_SECONDS: float = float(os.getenv("GEMINI_RETRY_DELAY_SECONDS", "0.5"))
     GEMINI_QUOTA_CIRCUIT_SECONDS: float = float(os.getenv("GEMINI_QUOTA_CIRCUIT_SECONDS", "900"))
     GEMINI_CIRCUIT_SECONDS: float = float(os.getenv("GEMINI_CIRCUIT_SECONDS", "60"))
@@ -72,15 +72,35 @@ class Settings(BaseSettings):
     )
     AUDIO_STORAGE_DIR: str = os.getenv("AUDIO_STORAGE_DIR", "audio_cache")
     AUDIO_CACHE_TTL_SECONDS: int = int(os.getenv("AUDIO_CACHE_TTL_SECONDS", "900"))
-    INTENT_CLASSIFIER_TIMEOUT_SECONDS: float = float(
-        os.getenv("INTENT_CLASSIFIER_TIMEOUT_SECONDS", "6.0")
-    )
     DIAGNOSTICS_API_KEY: str = os.getenv("DIAGNOSTICS_API_KEY", "")
 
     # ── Gemini LLM ────────────────────────────────────────────────────────
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
-    INTENT_CLASSIFIER_MODEL: str = os.getenv("INTENT_CLASSIFIER_MODEL", "gemini-3.5-flash-lite")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+
+    # ── Groq LLM (OpenAI-compatible API) ───────────────────────────────────
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    # Comma-separated, tried in order: if the first model fails, the next is tried before giving up on Groq.
+    GROQ_MODELS: str = os.getenv("GROQ_MODELS", "qwen/qwen3.8-27b,openai/gpt-oss-120b,openai/gpt-oss-20b")
+    GROQ_MAX_RETRY_WAIT_SECONDS: float = float(os.getenv("GROQ_MAX_RETRY_WAIT_SECONDS", "4"))
+    GROQ_BASE_URL: str = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+
+    # ── Conversation agent models ──────────────────────────────────────────
+    # One model runs the conversation: it reads the patient, calls tools and writes the reply. A turn is a
+    # short loop of model calls (LLM_AGENT_MAX_STEPS at most). Which provider answers first depends on the
+    # channel: each list is tried in order, and a provider without an API key or that failed a moment ago is
+    # skipped. An empty LLM_AGENT_MODEL falls back to GEMINI_MODEL. GEMINI_FALLBACK_MODEL (comma-separated)
+    # lists backup Gemini models tried in order when the primary fails or is out of quota.
+    LLM_PROVIDERS_CHAT: str = os.getenv("LLM_PROVIDERS_CHAT", "groq,gemini")
+    LLM_PROVIDERS_CALL: str = os.getenv("LLM_PROVIDERS_CALL", "groq,gemini")
+    LLM_PROVIDERS_VOICE: str = os.getenv("LLM_PROVIDERS_VOICE", "gemini,groq")
+    LLM_PROVIDER_COOLDOWN_SECONDS: float = float(os.getenv("LLM_PROVIDER_COOLDOWN_SECONDS", "60"))
+    LLM_AGENT_MODEL: str = os.getenv("LLM_AGENT_MODEL", "")
+    LLM_AGENT_TIMEOUT_SECONDS: float = float(os.getenv("LLM_AGENT_TIMEOUT_SECONDS", "10"))
+    LLM_AGENT_MAX_TOKENS: int = int(os.getenv("LLM_AGENT_MAX_TOKENS", "700"))
+    LLM_AGENT_TEMPERATURE: float = float(os.getenv("LLM_AGENT_TEMPERATURE", "0.3"))
+    LLM_AGENT_MAX_STEPS: int = int(os.getenv("LLM_AGENT_MAX_STEPS", "8"))
+    LLM_CONTEXT_MESSAGES: int = int(os.getenv("LLM_CONTEXT_MESSAGES", "20"))
 
     # ── ngrok & Public Domain (tunnel for Twilio webhooks) ─────────────────
     PUBLIC_DOMAIN: str = os.getenv("PUBLIC_DOMAIN", os.getenv("NGROK_URL", ""))

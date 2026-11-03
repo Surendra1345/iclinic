@@ -35,18 +35,3 @@ async def get_followup_candidates(patient_id: str, db: AsyncSession) -> list[dic
             "formatted_date": format_appointment_time(slot.start_time),
         })
     return candidates
-
-
-def followup_candidate_prompt(candidates: list[dict[str, Any]]) -> str:
-    if len(candidates) == 1:
-        visit = candidates[0]
-        branch = f" at {visit['location_name']}" if visit.get("location_name") else ""
-        return (
-            f"I found your previous visit with {visit['doctor_name']} ({visit['specialty']})"
-            f"{branch} on {visit['formatted_date']}. What date and time would you prefer for your follow-up?"
-        )
-    options = "; ".join(
-        f"{index}. {visit['doctor_name']} ({visit['specialty']}) on {visit['formatted_date']}"
-        for index, visit in enumerate(candidates, start=1)
-    )
-    return f"I found several previous visits: {options}. Which visit is this follow-up for?"

@@ -492,9 +492,10 @@ async def initial_call_webhook(request: Request):
         raise HTTPException(status_code=404, detail="Outbound call was not found.")
     to_phone = call_record.number_called
 
+    # Only a greeting: the patient is asked who they are when they ask for something that needs it.
     greeting_text = (
         f"Hello! Thank you for answering. This is {settings.AGENT_NAME} calling from {settings.CLINIC_NAME}. "
-        f"For your medical privacy and security, could you please confirm your full name and date of birth?"
+        f"How can I help you today?"
     )
 
     persistence_started = time.perf_counter()

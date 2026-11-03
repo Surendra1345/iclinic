@@ -147,6 +147,17 @@ export const frontdeskService = {
   },
 
   /**
+   * Marks a booked or rescheduled appointment as completed.
+   */
+  async markAppointmentCompleted(id: string): Promise<{ status: string; changed: boolean }> {
+    const response = await apiClient.patch<{ status: string; changed: boolean }>(
+      `/api/dashboard/appointments/${id}/status`,
+      { status: 'completed' }
+    )
+    return response.data
+  },
+
+  /**
    * Updates escalation status ('pending' | 'contacted' | 'resolved') and optional staff notes.
    */
   async updateForwardedRequest(

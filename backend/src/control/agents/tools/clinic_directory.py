@@ -207,18 +207,24 @@ def branch_doctors(branch_name: str) -> Dict[str, Any]:
     return {"branch": "All Branches", "doctors": []}
 
 
-def join_names(names: List[str], conjunction: str = "and") -> str:
-    if not names:
-        return ""
-    if len(names) == 1:
-        return names[0]
-    return ", ".join(names[:-1]) + f", {conjunction} {names[-1]}"
+def doctors() -> List[Dict[str, str]]:
+    return [{"name": d.full_name, "specialty": d.specialty, "branch": d.branch} for d in _doctors]
 
 
-def branches_sentence() -> str:
-    """e.g. 'City Care Clinic has 4 branches: A, B, C, and D.' built from the DB."""
-    names = branch_names()
-    if not names:
-        return f"Please tell me which {settings.CLINIC_NAME} branch you would prefer."
-    noun = "branch" if len(names) == 1 else "branches"
-    return f"{settings.CLINIC_NAME} has {len(names)} {noun}: {join_names(names)}."
+def canonical_branch(value: Optional[str]) -> Optional[str]:
+    """The clinic's short branch name that `value` refers to, or None. Validates what the model returned."""
+    return match_branch(value) if value else None
+
+
+def canonical_doctor(value: Optional[str]) -> Optional[str]:
+    return match_doctor(value) if value else None
+
+
+def canonical_specialty(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    wanted = value.strip().casefold()
+    for name in all_specialties():
+        if name.casefold() == wanted:
+            return name
+    return specialty_in_text(value)

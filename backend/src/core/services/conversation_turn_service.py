@@ -10,7 +10,8 @@ from typing import Any, Awaitable, Callable, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.control.agents.graph import get_agent_graph
-from src.constants.enums import ConversationState
+from src.control.agents.state import AWAITING_HANDOFF_CONTACT, CONFIRMATION_STEPS, PERSISTED_FIELDS, build_input_state
+from src.constants.enums import ConversationState, OutcomeType
 from src.core.services import deferred_tasks
 from src.utils.pii import redact_pii
 from src.data.repositories.conversation_repository import ConversationRepository
@@ -36,64 +37,30 @@ class ConversationTurnResult:
 class ConversationTurnService:
     """Runs one agent turn and persists the complete turn consistently."""
 
-    _PERSISTED_FIELDS = (
-        "intent", "pending_intent", "is_verified", "is_new_patient",
-        "awaiting_identity_verification", "patient_id", "patient_name",
-        "patient_dob", "patient_email", "patient_phone", "verify_attempts",
-        "target_slot_id",
-        "target_slot_details",
-        "offered_slots",
-        "active_appointment_id",
-        "active_appointment_details",
-        "preferred_specialty",
-        "preferred_location",
-        "preferred_doctor",
-        "preferred_date",
-        "preferred_appointment_type", "awaiting_appointment_type", "visit_reason",
-        "awaiting_followup_visit",
-        "followup_candidates",
-        "awaiting_followup_decision",
-        "awaiting_preferred_date",
-        "awaiting_patient_email",
-        "awaiting_cancel_confirmation", "awaiting_change_action_choice",
-        "preferred_language", "language_confirmed", "language_confidence",
-        "handoff_required", "handoff_reason", "awaiting_handoff_contact", "handoff_completed",
-        "frontdesk_alert_sent",
-        "is_emergency",
-        "is_completed", "booking_confirmed",
-    )
+    _PERSISTED_FIELDS = PERSISTED_FIELDS
 
     @staticmethod
     def _conversation_state(result: dict[str, Any]) -> ConversationState | None:
+        """Where the conversation stands, worked out from the agent's state after the turn."""
         if result.get("handoff_required"):
             return ConversationState.HANDED_TO_FRONT_DESK
-        intent = str(result.get("intent") or "").lower()
-        if intent == "close":
-            return None  # end_call has already recorded the final state
         if result.get("booking_confirmed"):
             return {"book": ConversationState.BOOKED, "reschedule": ConversationState.RESCHEDULED,
-                    "cancel": ConversationState.CANCELLED}.get(intent)
-        waiting_on_patient = any(
-            result.get(flag)
-            for flag in ("awaiting_cancel_confirmation", "awaiting_patient_email", "awaiting_appointment_type")
-        )
+                    "cancel": ConversationState.CANCELLED}.get(str(result.get("intent") or "").lower())
+        if result.get("end_outcome") or result.get("is_completed"):
+            return None   # a closing turn must not move a finished conversation back to "collecting details"
+        awaiting = result.get("awaiting")
         if result.get("target_slot_id"):
-            return ConversationState.RECONFIRMING if waiting_on_patient else ConversationState.SLOT_RESERVED
-        if result.get("awaiting_cancel_confirmation"):
+            return ConversationState.RECONFIRMING if awaiting in CONFIRMATION_STEPS else ConversationState.SLOT_RESERVED
+        if awaiting in CONFIRMATION_STEPS:
             return ConversationState.RECONFIRMING
-        if result.get("offered_slots") and intent in ("book", "reschedule"):
+        if result.get("offered_slots"):
             return ConversationState.SUGGESTING_SLOTS
         if result.get("is_verified"):
             return ConversationState.COLLECTING_DETAILS
-        if result.get("awaiting_identity_verification") or result.get("pending_intent"):
+        if result.get("verify_attempts"):
             return ConversationState.IDENTIFYING_PATIENT
         return None
-
-    _AWAITING_FLAGS = (
-        "awaiting_identity_verification", "awaiting_preferred_date", "awaiting_patient_email",
-        "awaiting_appointment_type", "awaiting_cancel_confirmation", "awaiting_change_action_choice",
-        "awaiting_followup_visit", "awaiting_followup_decision", "awaiting_handoff_contact",
-    )
 
     @classmethod
     def _step_log(
@@ -112,7 +79,7 @@ class ConversationTurnService:
             "channel": channel,
             "intent": result.get("intent"),
             "state": state.value if state else None,
-            "waiting_for": [flag.removeprefix("awaiting_") for flag in cls._AWAITING_FLAGS if result.get(flag)],
+            "waiting_for": [result["awaiting"]] if result.get("awaiting") else [],
             "slot_held": bool(result.get("target_slot_id")),
             "slots_offered": len(result.get("offered_slots") or []),
             "verified": bool(result.get("is_verified")),
@@ -160,6 +127,23 @@ class ConversationTurnService:
         await ConversationRepository(db).update_last_agent_message_metadata(
             uuid.UUID(str(conversation_id)), self._json_safe(metadata)
         )
+
+    @staticmethod
+    async def _record_end(repo: ConversationRepository, convo_id: uuid.UUID, result: dict[str, Any]) -> None:
+        """Record how a finished conversation ended: handed over, wrong person, or simply ended."""
+        end = result.get("end_outcome")
+        if end == "handed_to_front_desk":
+            await repo.close(convo_id, OutcomeType.HANDED_TO_FRONT_DESK, handoff_reason=result.get("end_reason"))
+        elif end == "wrong_person":
+            await repo.close(convo_id, OutcomeType.WRONG_PERSON)
+        elif end == "ended":
+            conversation = await repo.get(convo_id)
+            finished = {OutcomeType.BOOKED, OutcomeType.RESCHEDULED, OutcomeType.CANCELLED,
+                        OutcomeType.HANDED_TO_FRONT_DESK, OutcomeType.WRONG_PERSON}
+            if conversation is not None and conversation.outcome in finished:
+                await repo.mark_ended(convo_id)   # a final "thank you" must not turn a booking into "abandoned"
+            else:
+                await repo.close(convo_id, OutcomeType.ABANDONED)
 
     async def run_turn(
         self,
@@ -247,6 +231,8 @@ class ConversationTurnService:
             }
             if "target_slot_id" in result and result["target_slot_id"] is None:
                 state_to_save["target_slot_details"] = None
+            # The front-desk dashboard reads this flag to show requests still waiting for a callback contact.
+            state_to_save["awaiting_handoff_contact"] = result.get("awaiting") == AWAITING_HANDOFF_CONTACT
             if state_to_save:
                 await repo.update_collected_details(convo_id, state_to_save)
             patient_id = result.get("patient_id")
@@ -263,6 +249,7 @@ class ConversationTurnService:
             )
             if result.get("booking_confirmed"):
                 await repo.record_action_outcome(convo_id, result.get("intent"))
+            await self._record_end(repo, convo_id, result)
             await db.commit()
             # Slow follow-up work (confirmation messages) starts only now that the turn is saved.
             deferred_tasks.launch(deferred_jobs)
@@ -317,19 +304,9 @@ class ConversationTurnService:
         if not conversation:
             raise LookupError("Outbound conversation was not found.")
 
-        input_state: dict[str, Any] = {
-            "call_sid": call_sid,
-            "conversation_id": str(conversation_uuid),
-            "patient_phone": stored_phone,
-            "channel": "outbound_call",
-            "latest_user_speech": patient_text,
-            "is_verified": bool(conversation.identity_verified_at),
-        }
-        if conversation.patient_id:
-            input_state["patient_id"] = str(conversation.patient_id)
-        if conversation.collected_details:
-            for key, value in conversation.collected_details.items():
-                input_state.setdefault(key, value)
+        input_state = build_input_state(
+            conversation, channel="outbound_call", call_sid=call_sid, speech=patient_text, patient_phone=stored_phone,
+        )
 
         turn = await self.run_turn(
             db,
