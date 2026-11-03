@@ -32,3 +32,8 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
 ]
+
+[tool.pytest.ini_options]
+# Lets `pytest` (not only `python -m pytest`) import the `src` package, as the CI pipeline runs it.
+pythonpath = ["."]
+testpaths = ["tests"]
