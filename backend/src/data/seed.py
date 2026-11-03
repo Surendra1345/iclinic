@@ -8,7 +8,7 @@ Seeds the 5 initial static tables:
   4. slots (1,344 30-minute slots; derived via provider -> location)
   5. patients (sample test patients for outbound calls & verification)
 
-Date range: 25-31 October 2026 (inclusive), Asia/Kolkata (IST).
+Date range: today and the next 6 days (inclusive), Asia/Kolkata (IST). Re-run it to add the coming days.
 Daily windows: 09:00-12:00 and 14:00-17:00 (30-minute slots).
 
 Run:
@@ -106,8 +106,8 @@ PATIENTS = [
     ("Surendra", date(2004, 9, 3), "+919986251229", "surendra@gmail.com"),
 ]
 
-DATE_START = date(2026, 10, 25)
-DATE_END = date(2026, 10, 31)
+DATE_START = datetime.now(IST).date()
+DATE_END = DATE_START + timedelta(days=6)
 SESSION_WINDOWS = [(time(9, 0), time(12, 0)), (time(14, 0), time(17, 0))]
 SLOT_MINUTES = 30
 

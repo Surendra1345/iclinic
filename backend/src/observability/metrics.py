@@ -44,21 +44,16 @@ scheduler_released_slots_total = Counter(
     "Expired slot reservations released by the scheduler.",
 )
 
-intent_classification_duration_seconds = Histogram(
-    "iclinic_intent_classification_duration_seconds",
-    "Duration of intent classification in seconds.",
-    ["model", "source"],
-    buckets=[0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0],
+llm_call_duration_seconds = Histogram(
+    "iclinic_llm_call_duration_seconds",
+    "Duration of one agent model call in seconds.",
+    ["role"],
+    buckets=[0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 12.0],
 )
-intent_classification_fallback_total = Counter(
-    "iclinic_intent_classification_fallback_total",
-    "Total fallback intent classifications triggered.",
-    ["reason"],
-)
-intent_classification_total = Counter(
-    "iclinic_intent_classification_total",
-    "Total intent classifications requested.",
-    ["model", "outcome"],
+llm_calls_total = Counter(
+    "iclinic_llm_calls_total",
+    "Agent model calls by outcome (ok, invalid_output, unavailable).",
+    ["role", "outcome"],
 )
 conversation_turn_duration_seconds = Histogram(
     "iclinic_conversation_turn_duration_seconds",

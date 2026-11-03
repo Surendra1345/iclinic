@@ -26,7 +26,7 @@ flowchart LR
     end
 
     subgraph External["External services"]
-        GEMINI["Gemini<br/>intent, clinic answers, translation"]
+        GEMINI["Gemini<br/>understands the message, writes the reply, translation"]
         SARVAM["Sarvam<br/>speech to text, text to speech"]
         TWILIO["Twilio<br/>calls and SMS"]
         SMTP["SMTP<br/>email"]
@@ -59,40 +59,17 @@ of booking rules. The database is the only source of doctors, branches and slots
 
 ```mermaid
 flowchart TD
-    START([patient message]) --> S[start<br/>reset per-turn flags]
-    S -->|emergency or handoff in progress| H[handoff to front desk]
-    S -->|"identity words, or unverified"| ID[identity<br/>name + date of birth]
-    S -->|new patient| REG[register]
-    S -->|no speech on a call| G[greet]
-    S --> DI[detect intent]
-
-    DI -->|"answer ready<br/>(yes/no, ok, past date, walk away...)"| END1([reply])
-    DI -->|clinic question| FAQ[faq<br/>answer from database facts]
-    DI -->|book| B[booking]
-    DI -->|reschedule| R[reschedule]
-    DI -->|cancel| C[cancel]
-    DI -->|"unverified patient wants an action"| ID
-    DI -->|goodbye| E[end call<br/>record outcome]
-    DI -->|handoff| H
-
-    ID -->|verified| DI
-    ID -->|too many failures| H
-    ID --> END1
-    REG --> END1
-
-    B -->|booked| CONF[confirmation]
-    R -->|rescheduled| CONF
-    C -->|cancelled| CONF
-    B --> END1
-    R --> END1
-    C --> END1
-    B -->|booking failed| H
-    FAQ --> END1
-    CONF -->|"SMS + email queued"| E
-    H --> END1
-    E --> END2([turn ends, outcome saved])
-    G --> END1
+    START([patient message]) --> G[gate<br/>reset per-turn flags, spot system events]
+    G --> M{agent model}
+    M -->|calls a tool| T[toolbox<br/>enforces the safety rules]
+    T -->|result| M
+    M -->|plain text| R([reply to the patient])
+    T --> DB[(database)]
 ```
+
+The model picks the tools and the order; each tool refuses what the rules forbid (identity first, held slot before
+booking, a recorded yes/no question in the previous turn before any write, one active appointment, the 24 hour cutoff).
+
 
 Between turns the agent's state (identity, held slot, chosen doctor and date, what it is waiting for) is kept in the
 database, so each message continues where the last one stopped.
@@ -115,7 +92,7 @@ sequenceDiagram
     UI->>API: message + session id
     API->>T: run turn
     T->>A: invoke
-    A->>G: classify intent (rules if Gemini is slow)
+    A->>G: read the message into structured data (understand)
     A-->>T: "please give name and date of birth"
     T->>DB: save message, state, step log
     API-->>UI: reply

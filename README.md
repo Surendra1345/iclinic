@@ -44,16 +44,18 @@ src/
 │   │   ├── appointment_service.py        # Atomic book / reschedule / cancel
 │   │   ├── auth_service.py               # Front desk login and signed session tokens
 │   │   ├── conversation_turn_service.py  # Shared per-turn runner for chat, voice and calls
-│   │   ├── intent_classification_service.py # Gemini intent classification with offline fallback
-│   │   ├── medical_safety_service.py     # Emergency detection
+│   │   ├── confirmation_delivery.py      # SMS / email confirmations and front-desk alert, sent after the turn is saved
+│   │   ├── llm_service.py                # Model access: one tool-calling agent model, backup models, failure handling
 │   │   └── notification_service.py       # SMS / email confirmations and front-desk alerts
 │   └── scheduler.py                 # Background jobs (outbound retries, call reconciliation, slot-hold cleanup)
 ├── control/
 │   └── agents/                      # AI Voice & Chat Booking Agent
-│       ├── graph.py, edges.py       # LangGraph workflow and routing
-│       ├── state.py, prompts.py     # Conversation state and prompts
-│       ├── nodes/                   # Intent detection, identity, booking, reschedule, cancel, FAQ, handoff
-│       └── tools/                   # Slot, booking, identity and clinic-directory tools
+│       ├── graph.py                 # LangGraph workflow: gate -> agent
+│       ├── state.py                 # Conversation state, rebuilt from the database every turn
+│       ├── prompts.py               # The agent's instructions and the context it gets each turn
+│       ├── toolbox.py               # The tools the model can call, and the safety rules each one enforces
+│       ├── nodes/                   # gate (events, resets) and agent (the model's tool-calling loop)
+│       └── tools/                   # Database actions: slots, booking, identity, registration, clinic directory
 ├── data/
 │   ├── clients/
 │   │   └── postgres.py              # Async SQLAlchemy engine & session factory
@@ -87,6 +89,43 @@ src/
 ├── schemas/                         # Pydantic request schemas (auth, dashboard, calls, voice)
 └── utils/                           # Shared helpers (appointment time, branch names, PII redaction, Tamil / Telugu short answers)
 ```
+
+---
+
+## 🤖 How the agent works
+
+Every patient message goes through the same two steps, on every channel (chat, browser voice, phone call):
+
+1. **gate** (code): resets what belongs to one turn and recognises system events (call connected, nothing heard).
+2. **agent** (model): one model reads the whole message, decides what to do and calls **tools** in whatever order the conversation needs: verify or register the patient, look up the clinic, check their appointment, search and hold a time, ask for confirmation, book, reschedule, cancel, hand over to the front desk, end the conversation. It then writes the reply. There is no fixed script: it handles several requests in one sentence, changes of mind and questions at any point.
+
+The model chooses; the **tools enforce the rules**, so a wrong choice is refused rather than carried out:
+
+- Nothing about a patient works until their name and date of birth match (or they are registered); two failed checks go to the front desk, and the patient is never told which detail failed.
+- A time can only be held if a search in this conversation offered it.
+- A booking, change or cancellation is written only if the *previous* turn recorded a yes/no question for it and the patient's own words in the current message contain the consent the model quotes.
+- One active appointment per patient, and the 24 hour cutoff, are enforced by the tools and the booking service.
+
+If no model can be reached, the turn is rolled back and the patient gets one apology. The database is changed only through the tools, never by the model directly.
+
+### Model configuration
+
+Set these in the environment (`.env`); only the key is required:
+
+| Variable | Purpose |
+|---|---|
+| `GEMINI_API_KEY` | API key for the model provider |
+| `GEMINI_MODEL` | Gemini model (default `gemini-3.5-flash`) |
+| `GROQ_API_KEY`, `GROQ_MODELS` | Groq key and models tried in order (default `qwen/qwen3.8-27b,openai/gpt-oss-120b,openai/gpt-oss-20b`); each must support tool calling |
+| `LLM_PROVIDERS_CHAT`, `LLM_PROVIDERS_CALL`, `LLM_PROVIDERS_VOICE` | Which providers answer for web chat, phone calls and the browser voice assistant, in order (defaults `groq,gemini`, `groq,gemini`, `gemini,groq`). A provider with no key, or one that failed in the last minute, is skipped |
+| `LLM_AGENT_MODEL` | Optional model for the agent (empty = `GEMINI_MODEL`); it must support function calling |
+| `GEMINI_FALLBACK_MODEL` | Comma-separated backup Gemini models (default `gemini-3.8-flash`), tried in order when the primary fails or is out of quota |
+| `LLM_AGENT_TIMEOUT_SECONDS`, `LLM_AGENT_MAX_TOKENS`, `LLM_AGENT_TEMPERATURE` | Per-call time limit (default 10 s), output limit, creativity |
+| `LLM_AGENT_MAX_STEPS` | Most model calls in one turn (default 8) |
+| `LLM_CONTEXT_MESSAGES` | How many recent messages the model sees (default 20) |
+| `DIAGNOSTICS_API_KEY` | Enables `GET /internal/diagnostics/llm` (header `X-Diagnostics-Key`) |
+
+Every message, including names and dates of birth, is sent to the model provider. Another provider can be added by implementing `LLMProvider` in `core/services/llm_service.py`.
 
 ---
 

@@ -16,6 +16,7 @@ from src.data.models.postgres.appointment_reschedule import AppointmentReschedul
 from src.data.models.postgres.conversation import Conversation
 from src.core.exceptions import AppointmentServiceError
 from src.data.models.postgres.slot import Slot
+from src.data.repositories.appointment_repository import AppointmentRepository
 
 
 class AppointmentService:
@@ -40,7 +41,9 @@ class AppointmentService:
         3. Transition slot status to 'booked'.
         4. Insert appointment record.
         """
-        # 1. One active appointment per patient check
+        # 1. One active appointment per patient check. An old appointment whose time has passed no longer counts:
+        # it becomes completed so the patient can book again.
+        await AppointmentRepository(self.db).complete_past_for_patient(patient_id)
         existing_appt = await self.db.scalar(
             select(Appointment).where(
                 Appointment.patient_id == patient_id,

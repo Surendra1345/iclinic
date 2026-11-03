@@ -53,6 +53,18 @@ export const useForwardedRequests = (filters: { status?: string; search?: string
   })
 }
 
+export const useMarkAppointmentCompleted = () => {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => frontdeskService.markAppointmentCompleted(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dashboard', 'appointments'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard', 'stats'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard', 'patients'] })
+    },
+  })
+}
+
 export const useUpdateForwardedRequest = () => {
   const queryClient = useQueryClient()
   return useMutation({

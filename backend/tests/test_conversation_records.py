@@ -4,7 +4,6 @@ import uuid
 from types import SimpleNamespace
 
 from src.constants.enums import ChannelType, OutcomeType
-from src.control.agents.nodes import end_call
 from src.control.agents.tools import booking_tools
 from src.core.services.conversation_turn_service import ConversationTurnService
 
@@ -62,47 +61,50 @@ def test_outbound_call_booking_is_still_outbound_call():
 
 # ---- saying thank you after a booking must not turn it into "abandoned" -----------------------
 
-def _end_call(existing_outcome, **state):
+def _end(existing_outcome, end_outcome="ended", reason=None):
     calls = []
 
     class _Repo:
-        def __init__(self, db):
-            pass
-
         async def get(self, conversation_id):
             return SimpleNamespace(outcome=existing_outcome)
 
         async def mark_ended(self, conversation_id):
             calls.append(("mark_ended", None))
 
-        async def close(self, conversation_id, outcome, **_):
-            calls.append(("close", outcome))
+        async def close(self, conversation_id, outcome, **kwargs):
+            calls.append(("close", outcome, kwargs.get("handoff_reason")))
 
-    original = end_call.ConversationRepository
-    end_call.ConversationRepository = _Repo
-    try:
-        asyncio.run(end_call.end_call_node({"conversation_id": str(uuid.uuid4()), "intent": "close", **state}, None))
-    finally:
-        end_call.ConversationRepository = original
+    asyncio.run(ConversationTurnService._record_end(_Repo(), uuid.uuid4(), {"end_outcome": end_outcome, "end_reason": reason}))
     return calls
 
 
 def test_thank_you_after_a_booking_keeps_the_booked_outcome():
-    assert _end_call(OutcomeType.BOOKED) == [("mark_ended", None)]
+    assert _end(OutcomeType.BOOKED) == [("mark_ended", None)]
 
 
 def test_thank_you_after_cancel_reschedule_or_handoff_keeps_the_outcome():
     for outcome in (OutcomeType.CANCELLED, OutcomeType.RESCHEDULED, OutcomeType.HANDED_TO_FRONT_DESK):
-        assert _end_call(outcome) == [("mark_ended", None)]
+        assert _end(outcome) == [("mark_ended", None)]
 
 
 def test_thank_you_with_nothing_done_is_still_abandoned():
-    assert _end_call(None) == [("close", OutcomeType.ABANDONED)]
+    assert _end(None) == [("close", OutcomeType.ABANDONED, None)]
+
+
+def test_handover_and_wrong_person_are_recorded_with_their_outcome():
+    assert _end(None, "handed_to_front_desk", "Patient requested front desk transfer") == [
+        ("close", OutcomeType.HANDED_TO_FRONT_DESK, "Patient requested front desk transfer")]
+    assert _end(None, "wrong_person") == [("close", OutcomeType.WRONG_PERSON, None)]
+
+
+def test_a_turn_that_does_not_end_the_conversation_records_nothing():
+    assert _end(None, end_outcome=None) == []
 
 
 def test_closing_turn_does_not_reset_the_state_to_collecting_details():
-    assert ConversationTurnService._conversation_state({"intent": "close", "is_verified": True}) is None
-    assert ConversationTurnService._conversation_state({"intent": "faq_response", "is_verified": True}) is not None
+    assert ConversationTurnService._conversation_state({"end_outcome": "ended", "is_verified": True}) is None
+    assert ConversationTurnService._conversation_state({"is_completed": True, "is_verified": True}) is None
+    assert ConversationTurnService._conversation_state({"is_verified": True}) is not None
 
 
 # ---- misspelt specialties still match, ordinary words do not ----------------------------------

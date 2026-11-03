@@ -217,7 +217,7 @@ class SlotRepository:
         """Release a reserved slot back to AVAILABLE."""
         await self.db.execute(
             update(Slot)
-            .where(Slot.id == slot_id)
+            .where(Slot.id == slot_id, Slot.status == SlotStatus.RESERVED)
             .values(status=SlotStatus.AVAILABLE, reserved_until=None)
         )
         await self.db.flush()

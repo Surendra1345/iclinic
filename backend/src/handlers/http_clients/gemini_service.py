@@ -36,9 +36,20 @@ class GeminiService:
     def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
         self.api_key = api_key or settings.GEMINI_API_KEY
         self.model_name = model_name or settings.GEMINI_MODEL
-        self.client = genai.Client(api_key=self.api_key or None)
+        self._client = None
         if not self.api_key:
             logger.warning("GEMINI_API_KEY not configured. Gemini calls will fail.")
+
+    @property
+    def client(self):
+        """Created on first use, so the app starts without an API key and fails only when a call is made."""
+        if self._client is None:
+            self._client = genai.Client(api_key=self.api_key or None)
+        return self._client
+
+    @client.setter
+    def client(self, value) -> None:
+        self._client = value
 
     async def _call_model(self, model: str, contents: str, timeout: float, **config_kwargs):
         """One request to one model, with thinking disabled for speed where the model allows it."""
@@ -104,12 +115,13 @@ class GeminiService:
         system_instruction: Optional[str] = None,
         temperature: float = 0.2,
         max_output_tokens: Optional[int] = None,
+        timeout: Optional[float] = None,
     ) -> str:
         """Generate plain text using the async SDK client."""
         started = time.perf_counter()
         try:
             response = await self._with_fallback(lambda model: self._call_model(
-                model, prompt, settings.GEMINI_TIMEOUT_SECONDS,
+                model, prompt, timeout or settings.GEMINI_TIMEOUT_SECONDS,
                 system_instruction=system_instruction,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
@@ -132,10 +144,11 @@ class GeminiService:
         system_instruction: Optional[str] = None,
         temperature: float = 0.0,
         max_output_tokens: int = 128,
+        timeout: Optional[float] = None,
     ) -> Any:
         """Generate JSON constrained by a Pydantic response schema."""
         return await self._with_fallback(lambda model: self._call_model(
-            model, prompt, settings.GEMINI_STRUCTURED_TIMEOUT_SECONDS,
+            model, prompt, timeout or settings.GEMINI_STRUCTURED_TIMEOUT_SECONDS,
             system_instruction=system_instruction,
             temperature=temperature,
             max_output_tokens=max_output_tokens,

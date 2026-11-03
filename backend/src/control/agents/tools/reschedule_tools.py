@@ -13,7 +13,18 @@ async def reschedule_appointment(
     db: AsyncSession,
     reason: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Execute atomic reschedule."""
+    """Move an appointment to a new held slot and free the old slot.
+
+    WHAT IT DOES: in one transaction, books the new slot, releases the old one and writes a reschedule
+    record. Only call it after identity is confirmed, the new slot is held, and the patient answered a clear
+    yes to the reschedule question in the previous turn.
+    INPUT: appointment_id_str (the current appointment), new_slot_id_str (the held new slot),
+    conversation_id_str (links the record to the chat or call), reason (optional).
+    RETURNS: appointment_id, status, new_slot_id and reschedule_id.
+    RAISES: AppointmentServiceError if the appointment is not found or not active, the new slot is missing,
+    in the past or already booked, it is the same slot as before, or the current appointment starts within
+    the cutoff window (24 hours); the patient is then sent to the front desk.
+    """
     service = AppointmentService(db)
     appointment_id = uuid.UUID(appointment_id_str)
     new_slot_id = uuid.UUID(new_slot_id_str)

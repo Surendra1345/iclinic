@@ -13,7 +13,16 @@ async def cancel_appointment(
     db: AsyncSession,
     reason: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Execute atomic cancellation."""
+    """Cancel a patient's appointment and free its slot.
+
+    WHAT IT DOES: marks the appointment cancelled, releases the slot for others and writes a cancellation
+    record, all in one transaction. Only call it after identity is confirmed and the patient answered a
+    clear yes to "are you sure you want to cancel?" in the previous turn.
+    INPUT: appointment_id_str, conversation_id_str (links the record to the chat or call), reason (optional).
+    RETURNS: appointment_id, status and cancellation_id.
+    RAISES: AppointmentServiceError if the appointment is not found, is not active, or starts within the
+    cutoff window (24 hours); the patient is then sent to the front desk.
+    """
     service = AppointmentService(db)
     appointment_id = uuid.UUID(appointment_id_str)
     try:

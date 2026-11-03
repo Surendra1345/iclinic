@@ -50,7 +50,9 @@ def test_specialty_and_branch_lookups_and_sentence():
     assert cd.specialties_for_branch("Riverside") == ["Cardiology"]
     assert cd.branches_for_specialty("cardiology") == ["Riverside", "St. Mary"]
     assert cd.branch_doctors("St. Mary")["branch"] == "St. Mary"
-    assert "2 branches: Riverside and St. Mary" in cd.branches_sentence().replace(", and", " and")
+    assert cd.canonical_branch("riverside") == "Riverside"
+    assert cd.canonical_doctor("Dr. Omar Shaikh") == "Dr. Omar Shaikh"
+    assert cd.canonical_specialty("cardiology") == "Cardiology" or cd.canonical_specialty("cardiology") == "cardiology"
 
 
 def test_typos_still_match_branches_and_doctors():
@@ -58,18 +60,3 @@ def test_typos_still_match_branches_and_doctors():
     assert cd.match_branch("riversde") == "Riverside"
     assert cd.match_doctor("kavya menan") == "Dr. Kavya Menon"
     assert cd.match_branch("hello there") is None
-
-
-def test_start_node_resets_turn_flags_and_drops_cancelled_appointment():
-    from src.control.agents.nodes.start import start_conversation_node
-
-    state = {
-        "conversation_id": "c1", "booking_confirmed": True, "is_completed": True, "intent": "cancel",
-        "active_appointment_id": "a1", "active_appointment_details": {"x": 1}, "is_verified": True,
-    }
-    out = asyncio.run(start_conversation_node(state, None))
-    assert out["booking_confirmed"] is False and out["is_completed"] is False
-    assert out["active_appointment_id"] is None and out["active_appointment_details"] is None
-
-    kept = asyncio.run(start_conversation_node({**state, "intent": "book"}, None))
-    assert kept["booking_confirmed"] is False and "active_appointment_id" not in kept

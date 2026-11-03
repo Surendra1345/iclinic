@@ -1,6 +1,6 @@
 """Appointment repository — create, query, and update appointments."""
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 # pyrefly: ignore[missing-import]
@@ -25,6 +25,25 @@ class AppointmentRepository:
         self.db = db
 
     # ── Queries ───────────────────────────────────────────────────────────────
+
+    async def complete_past_for_patient(self, patient_id: uuid.UUID) -> int:
+        """Mark the patient's booked or rescheduled appointments whose time has passed as completed.
+
+        An appointment nobody marked completed must not stop the patient booking again. The database allows
+        only one booked appointment per patient, so the old one has to leave that state first.
+        Returns how many were completed.
+        """
+        passed = select(Slot.id).where(Slot.start_time <= datetime.now(timezone.utc))
+        result = await self.db.execute(
+            update(Appointment)
+            .where(
+                Appointment.patient_id == patient_id,
+                Appointment.status.in_([AppointmentStatus.BOOKED, AppointmentStatus.RESCHEDULED]),
+                Appointment.slot_id.in_(passed),
+            )
+            .values(status=AppointmentStatus.COMPLETED)
+        )
+        return result.rowcount or 0
 
     async def get_active_for_patient(self, patient_id: uuid.UUID) -> Optional[Appointment]:
         """Get the single active (booked or rescheduled) appointment for a patient."""

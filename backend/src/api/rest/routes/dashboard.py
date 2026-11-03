@@ -19,11 +19,7 @@ from src.utils.appointment_time import CLINIC_TIMEZONE
 from src.constants.enums import (
     AppointmentStatus, ChannelType, ConfirmationStatusType, ConversationState, OutcomeType, SlotStatus,
 )
-from src.control.agents.tools.registration_tools import is_greeting, is_name_only_candidate
-from src.control.agents.tools import clinic_directory
-from src.control.agents.tools.chat_choices import reply_choices
-from src.control.agents.tools.slot_speech import chat_options
-from src.control.agents.tools.visit_type import active_visit_names
+from src.control.agents.state import build_input_state
 from src.data.clients.postgres import AsyncSessionLocal
 from src.data.models.postgres.appointment import Appointment
 from src.data.models.postgres.appointment_type import AppointmentType
@@ -45,11 +41,6 @@ dashboard_router = APIRouter(prefix="/api", tags=["Dashboard & Patient Chat"])
 from src.api.rest.dependencies import require_frontdesk
 from src.schemas.dashboard import AppointmentResponse, ChatMessageRequest, UpdateForwardedRequest
 sarvam_service = SarvamService()
-
-
-def _is_name_only_message(message: str) -> bool:
-    """Identify a bare name so an unverified chat never enters booking logic."""
-    return is_name_only_candidate(message)
 
 
 # ?????? Schemas ?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
@@ -232,6 +223,32 @@ async def list_appointments(
             })
 
         return {"appointments": appts, "total": len(appts)}
+
+
+class UpdateAppointmentStatus(BaseModel):
+    status: str
+
+
+@dashboard_router.patch("/dashboard/appointments/{appointment_id}/status", dependencies=[Depends(require_frontdesk)])
+async def update_appointment_status(appointment_id: str, req: UpdateAppointmentStatus):
+    """The front desk marks a booked or rescheduled appointment as completed."""
+    if req.status.lower() != AppointmentStatus.COMPLETED.value:
+        raise HTTPException(status_code=422, detail="Only the status 'completed' can be set here.")
+    try:
+        appt_uuid = uuid.UUID(appointment_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid appointment ID format.")
+    async with AsyncSessionLocal() as session:
+        appt = await session.get(Appointment, appt_uuid)
+        if appt is None:
+            raise HTTPException(status_code=404, detail="Appointment not found.")
+        if appt.status == AppointmentStatus.COMPLETED:
+            return {"status": "success", "appointment_status": appt.status.value, "changed": False}
+        if appt.status not in (AppointmentStatus.BOOKED, AppointmentStatus.RESCHEDULED):
+            raise HTTPException(status_code=409, detail=f"A {appt.status.value} appointment cannot be marked completed.")
+        appt.status = AppointmentStatus.COMPLETED
+        await session.commit()
+        return {"status": "success", "appointment_status": appt.status.value, "changed": True}
 
 
 @dashboard_router.get("/dashboard/patients", dependencies=[Depends(require_frontdesk)])
@@ -685,8 +702,6 @@ async def chat_with_clinic_agent(req: ChatMessageRequest):
         }
 
     async with AsyncSessionLocal() as session:
-        phone = (req.patient_phone or "").strip()
-        name = (req.patient_name or "").strip()
         conversation_repo = ConversationRepository(session)
         existing_conversation = await conversation_repo.get_by_call_sid(session_id)
         if not existing_conversation:
@@ -694,115 +709,23 @@ async def chat_with_clinic_agent(req: ChatMessageRequest):
                 channel=ChannelType.CHAT,
                 call_sid=session_id,
             )
-
-        saved_details = (
-            dict(existing_conversation.collected_details or {})
-            if existing_conversation
-            else {}
-        )
         linked_patient = (
             await session.get(Patient, existing_conversation.patient_id)
-            if existing_conversation and existing_conversation.patient_id
+            if existing_conversation.patient_id
             else None
         )
-        patient_phone = phone or saved_details.get("patient_phone") or (
-            linked_patient.phone if linked_patient else ""
+        # Contact details sent with the request are only contact details: they never verify identity.
+        input_state = build_input_state(
+            existing_conversation,
+            channel="chat",
+            call_sid=session_id,
+            speech=req.message,
+            patient_phone=(req.patient_phone or "").strip() or (linked_patient.phone if linked_patient else ""),
         )
-        patient_email = req.patient_email or saved_details.get("patient_email") or (
-            linked_patient.email if linked_patient else None
-        )
-        patient_name = (
-            name
-            if name and not is_greeting(name)
-            else (
-                saved_details.get("patient_name")
-                or saved_details.get("registration_name")
-                if not is_greeting(saved_details.get("patient_name") or saved_details.get("registration_name", ""))
-                else None
-            )
-        )
-        patient_dob = saved_details.get("patient_dob") or saved_details.get("registration_dob")
-
-        input_state = {
-            "call_sid": session_id,
-            "conversation_id": str(existing_conversation.id),
-            "patient_phone": patient_phone,
-            "patient_email": patient_email,
-            "patient_name": patient_name,
-            "patient_dob": patient_dob,
-            "channel": "chat",
-            "latest_user_speech": req.message.strip(),
-            "messages": [
-                *(existing_conversation.messages or []),
-                {
-                    "role": "patient",
-                    "content": req.message.strip(),
-                    "at": datetime.utcnow().isoformat(),
-                },
-            ],
-            # A patient record linked by phone/contact details is not proof of identity.
-            # Only the explicit name + DOB verification timestamp may open the gate.
-            "is_verified": bool(existing_conversation.identity_verified_at),
-            "is_new_patient": bool(saved_details.get("is_new_patient")),
-            "awaiting_identity_verification": bool(saved_details.get("awaiting_identity_verification")),
-            "pending_intent": saved_details.get("pending_intent"),
-            "intent": saved_details.get("intent"),
-        }
-        last_agent_msg = next((m.get("content") for m in reversed(existing_conversation.messages or []) if m.get("role") == "agent"), "")
-        input_state["latest_agent_speech"] = last_agent_msg
-        for field in (
-            "patient_id",
-            "verify_attempts",
-            "target_slot_id",
-            "target_slot_details",
-            "offered_slots",
-            "active_appointment_id",
-            "active_appointment_details",
-            "preferred_specialty",
-            "preferred_location",
-            "preferred_doctor",
-            "preferred_date",
-            "preferred_appointment_type",
-            "awaiting_appointment_type",
-            "visit_reason",
-            "awaiting_followup_visit",
-            "followup_candidates",
-            "awaiting_followup_decision",
-            "awaiting_preferred_date",
-            "awaiting_patient_email",
-            "awaiting_cancel_confirmation",
-            "awaiting_change_action_choice",
-            "awaiting_handoff_contact",
-            "handoff_completed",
-            "frontdesk_alert_sent",
-            "handoff_reason",
-            "handoff_required",
-            "is_emergency",
-        ):
-            if field in saved_details:
-                input_state[field] = saved_details[field]
+        if req.patient_email and not input_state.get("patient_email"):
+            input_state["patient_email"] = req.patient_email
 
         try:
-            invoke_turn = None
-            specialty_branch_reply = False
-            await clinic_directory.ensure_directory(session)   # so "Gynecology" is not mistaken for a name
-            if input_state.get("intent") == "faq_response" and input_state.get("preferred_specialty"):
-                from src.control.agents.nodes.booking_helpers import _match_branch
-                specialty_branch_reply = bool(_match_branch(req.message))
-
-            if (
-                not input_state["is_verified"]
-                and _is_name_only_message(req.message)
-                and not specialty_branch_reply
-            ):
-                # Preserve the privacy guard while routing persistence through the common turn service.
-                from src.control.agents.nodes.identity import identity_agent_node
-
-                async def invoke_turn(state):
-                    result = await identity_agent_node({**state, "is_verified": False}, session)
-                    result["intent"] = "identity"
-                    return result
-
             turn = await conversation_turn_service.run_turn(
                 session,
                 conversation_id=existing_conversation.id,
@@ -810,7 +733,6 @@ async def chat_with_clinic_agent(req: ChatMessageRequest):
                 channel="chat",
                 patient_text=req.message.strip(),
                 input_state=input_state,
-                invoke=invoke_turn,
             )
             result = turn.state
             speech = turn.speech
@@ -839,23 +761,8 @@ async def chat_with_clinic_agent(req: ChatMessageRequest):
                         {"audio_delivery": "text_only", "tts_error": "provider_exception"},
                     )
 
-            # Tap-to-pick times are a chat-only convenience, shown only while the patient is choosing.
-            choosing = (
-                not target_slot
-                and not result.get("booking_confirmed")
-                and not is_completed
-                and result.get("intent") in ("book", "reschedule")
-                and bool(result.get("offered_slots"))
-            )
-            slot_options = chat_options(result.get("offered_slots")) if choosing else []
-            if not slot_options and not is_completed:
-                # Other questions with fixed answers (branch, doctor, visit type, yes / no) also get buttons.
-                visit_types = (
-                    await active_visit_names(session) if "reason for your visit" in speech.lower() else []
-                )
-                slot_options = reply_choices(
-                    speech, branch_names=clinic_directory.branch_names(), visit_types=visit_types
-                )
+            # Tap-to-answer buttons are a chat-only convenience, offered by the agent's tools (time options, yes/no).
+            slot_options = [] if is_completed else list(result.get("choices") or [])
             return {
                 "reply": speech,
                 "session_id": session_id,
