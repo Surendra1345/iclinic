@@ -1,0 +1,68 @@
+# Production stack, run on the server by .github/workflows/deploy.yml (through deploy/deploy.sh).
+#
+# Differences from docker-compose.yml (development):
+#   - images come from GHCR, built by CI; nothing is built or mounted from source on the server
+#   - Postgres and the backend are not published to the host; only Caddy listens (80/443)
+#   - the database password comes from the server's .env, not a fixed value
+#   - Caddy gets and renews the HTTPS certificate for DOMAIN by itself (Let's Encrypt)
+#
+# The server's .env (kept next to this file, never in git) must define at least DOMAIN and POSTGRES_PASSWORD.
+# See deploy/env.example.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: iclinic
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the server .env}
+      POSTGRES_DB: iclinic
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iclinic -d iclinic"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: ghcr.io/${GHCR_OWNER:?set by deploy.sh}/iclinic-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      # Takes precedence over DATABASE_URL in .env.
+      DATABASE_URL: postgresql+asyncpg://iclinic:${POSTGRES_PASSWORD}@postgres:5432/iclinic
+      DB_ECHO: "false"
+      APP_ENV: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - audio_data:/app/audio_cache
+
+  frontend:
+    image: ghcr.io/${GHCR_OWNER:?set by deploy.sh}/iclinic-frontend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  # HTTPS front door: terminates TLS and passes everything to the frontend's nginx, which serves the
+  # site and proxies /api, /twilio and /health to the backend.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    command: caddy reverse-proxy --from ${DOMAIN:?set DOMAIN in the server .env} --to frontend:80
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
+volumes:
+  postgres_data:
+  audio_data:
+  caddy_data:
+  caddy_config:
